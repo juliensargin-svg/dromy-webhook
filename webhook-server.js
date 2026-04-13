@@ -4,6 +4,14 @@ const nodemailer = require('nodemailer');
 const fs = require('fs');
 const path = require('path');
 
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err);
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason);
+});
+
 const logoPath = path.join(__dirname, 'logo-dromy.jpg');
 console.log(`[init] Logo path: ${logoPath}, exists: ${fs.existsSync(logoPath)}`);
 
@@ -111,6 +119,10 @@ function buildEmailHtml({ ref, address, completedAt, photoUrl, signatureUrl, sig
 </body>
 </html>`;
 }
+
+app.get('/', (req, res) => {
+  res.send('OK');
+});
 
 app.get('/webhook/onfleet', (req, res) => {
   res.send(req.query.check || '');
