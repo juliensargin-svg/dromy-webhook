@@ -188,7 +188,8 @@ app.post('/webhook/onfleet', async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT;
+console.log('All env vars:', JSON.stringify(process.env));
 app.listen(PORT, () => {
   console.log('PORT env:', process.env.PORT);
   console.log('Listening on:', PORT);
