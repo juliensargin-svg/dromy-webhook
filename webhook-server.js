@@ -8,6 +8,10 @@ const logoPath = path.join(__dirname, 'logo-dromy.jpg');
 console.log(`[init] Logo path: ${logoPath}, exists: ${fs.existsSync(logoPath)}`);
 
 const app = express();
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  next();
+});
 app.use(express.json());
 
 const NOTES_PATTERN = /^\d{2}-\d+$/;
