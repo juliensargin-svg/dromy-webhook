@@ -108,6 +108,10 @@ function buildEmailHtml({ ref, address, completedAt, photoUrl, signatureUrl, sig
 </html>`;
 }
 
+app.get('/webhook/onfleet', (req, res) => {
+  res.send(req.query.check || '');
+});
+
 app.post('/webhook/onfleet', async (req, res) => {
   const { taskId, data } = req.body;
 
