@@ -2,9 +2,9 @@
   "name": "julien",
   "version": "1.0.0",
   "description": "",
-  "main": "onfleet-task.js",
+  "main": "webhook-server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node webhook-server.js"
   },
   "keywords": [],
   "author": "",
