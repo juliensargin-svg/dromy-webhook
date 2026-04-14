@@ -1,10 +1,13 @@
-console.log('[env] SMTP_PORT avant dotenv:', process.env.SMTP_PORT);
 require('dotenv').config({ override: false });
-console.log('[env] SMTP_PORT après dotenv:', process.env.SMTP_PORT);
 const express = require('express');
-const nodemailer = require('nodemailer');
+const { Resend } = require('resend');
 const fs = require('fs');
 const path = require('path');
+
+const resend = new Resend(process.env.RESEND_API_KEY);
+
+const logoPath = path.join(__dirname, 'logo-dromy.jpg');
+const logoBase64 = `data:image/jpeg;base64,${fs.readFileSync(logoPath).toString('base64')}`;
 
 process.on('uncaughtException', (err) => {
   console.error('[uncaughtException]', err);
@@ -14,8 +17,6 @@ process.on('unhandledRejection', (reason) => {
   console.error('[unhandledRejection]', reason);
 });
 
-const logoPath = path.join(__dirname, 'logo-dromy.jpg');
-console.log(`[init] Logo path: ${logoPath}, exists: ${fs.existsSync(logoPath)}`);
 
 const app = express();
 app.use((req, res, next) => {
@@ -27,16 +28,6 @@ app.use(express.json());
 const NOTES_PATTERN = /Bene\s+Bono\s+\d+/i;
 const ONFLEET_CDN = 'https://d15p8tr8p0vffz.cloudfront.net';
 
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: 465,
-  secure: true,
-  family: 4,
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-});
 
 async function fetchOnfleetTask(taskId) {
   const auth = Buffer.from(`${process.env.ONFLEET_API_KEY}:`).toString('base64');
@@ -95,7 +86,7 @@ function buildEmailHtml({ ref, address, completedAt, photoUrl, signatureUrl, sig
 <body>
   <div class="container">
     <div class="header">
-      <img src="cid:logo-dromy" alt="Dromy" />
+      <img src="${logoBase64}" alt="Dromy" />
       <h1>Confirmation de livraison</h1>
     </div>
     <div class="body">
@@ -174,33 +165,20 @@ app.post('/webhook/onfleet', async (req, res) => {
     ? `${ONFLEET_CDN}/${cd.signatureUploadId}/282x.png`
     : null;
 
-  const mailOptions = {
-    from: `"Dromy Livraisons" <${process.env.SMTP_USER}>`,
-    to: process.env.EMAIL_TO,
-    cc: process.env.SMTP_CC || undefined,
-    subject: `Livraison du ${new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Europe/Paris' })} Bene Bono effectuée`,
-    html: buildEmailHtml({
-      ref: notes,
-      address,
-      completedAt,
-      photoUrl,
-      signatureUrl,
-      signatureText: cd.signatureText || null,
-    }),
-    text: `Livraison confirmée\nRéférence : ${notes}\nAdresse : ${address}\nHeure : ${completedAt}`,
-    attachments: [
-      {
-        filename: 'logo-dromy.jpg',
-        path: logoPath,
-        cid: 'logo-dromy',
-      },
-    ],
-  };
+  const subject = `Livraison du ${new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Europe/Paris' })} Bene Bono effectuée`;
+  const html = buildEmailHtml({ ref: notes, address, completedAt, photoUrl, signatureUrl, signatureText: cd.signatureText || null });
 
   try {
-    const info = await transporter.sendMail(mailOptions);
-    console.log(`[webhook] Email envoyé pour ${notes} — messageId: ${info.messageId}`);
-    return res.status(200).json({ sent: true, messageId: info.messageId });
+    const { data, error } = await resend.emails.send({
+      from: process.env.EMAIL_FROM || 'Dromy Livraisons <onboarding@resend.dev>',
+      to: [process.env.EMAIL_TO],
+      cc: process.env.SMTP_CC ? [process.env.SMTP_CC] : undefined,
+      subject,
+      html,
+    });
+    if (error) throw new Error(JSON.stringify(error));
+    console.log(`[webhook] Email envoyé pour ${notes} — id: ${data.id}`);
+    return res.status(200).json({ sent: true, id: data.id });
   } catch (err) {
     console.error('[webhook] Erreur envoi email:', err.message);
     return res.status(500).json({ error: 'Email send failed', detail: err.message });
