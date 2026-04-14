@@ -183,6 +183,13 @@ app.post('/webhook/onfleet', async (req, res) => {
     return res.status(200).json({ sent: true, id: data.id });
   } catch (err) {
     console.error('[webhook] Erreur envoi email:', err.message);
+    await resend.emails.send({
+      from: process.env.EMAIL_FROM || 'Dromy Livraisons <onboarding@resend.dev>',
+      to: ['julien.sargin@gmail.com'],
+      cc: ['oweis@dromy.fr'],
+      subject: `⚠️ Erreur webhook Dromy — ${notes}`,
+      html: `<p>Une erreur s'est produite lors de l'envoi de l'email de confirmation pour <strong>${notes}</strong>.</p><p><strong>Erreur :</strong> ${err.message}</p><p><strong>Destinataire :</strong> ${recipientEmail}</p>`,
+    }).catch(e => console.error('[webhook] Erreur alerte:', e.message));
     return res.status(500).json({ error: 'Email send failed', detail: err.message });
   }
 });
