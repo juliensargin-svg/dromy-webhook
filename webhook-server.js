@@ -1,14 +1,3 @@
-require('dotenv').config({ override: false });
-const express = require('express');
-const { Resend } = require('resend');
-const fs = require('fs');
-const path = require('path');
-
-const resend = new Resend(process.env.RESEND_API_KEY);
-
-const logoPath = path.join(__dirname, 'logo-dromy.jpg');
-const logoBase64 = `data:image/jpeg;base64,${fs.readFileSync(logoPath).toString('base64')}`;
-
 process.on('uncaughtException', (err) => {
   console.error('[uncaughtException]', err);
   process.exit(1);
@@ -16,6 +5,25 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (reason) => {
   console.error('[unhandledRejection]', reason);
 });
+
+require('dotenv').config({ override: false });
+const express = require('express');
+const { Resend } = require('resend');
+const fs = require('fs');
+const path = require('path');
+
+console.log('[init] RESEND_API_KEY présente:', !!process.env.RESEND_API_KEY);
+
+const resend = new Resend(process.env.RESEND_API_KEY);
+
+const logoPath = path.join(__dirname, 'logo-dromy.jpg');
+let logoBase64 = '';
+try {
+  logoBase64 = `data:image/jpeg;base64,${fs.readFileSync(logoPath).toString('base64')}`;
+  console.log('[init] Logo chargé');
+} catch (e) {
+  console.warn('[init] Logo introuvable, emails sans logo:', e.message);
+}
 
 
 const app = express();
