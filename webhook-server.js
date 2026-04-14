@@ -22,7 +22,7 @@ app.use((req, res, next) => {
 });
 app.use(express.json());
 
-const NOTES_PATTERN = /^\d{2}-\d+$/;
+const NOTES_PATTERN = /Bene\s+Bono\s+\d+/i;
 const ONFLEET_CDN = 'https://d15p8tr8p0vffz.cloudfront.net';
 
 const transporter = nodemailer.createTransport({
