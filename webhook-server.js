@@ -8,21 +8,13 @@ process.on('unhandledRejection', (reason) => {
 require('dotenv').config({ override: false });
 const express = require('express');
 const { Resend } = require('resend');
-const fs = require('fs');
-const path = require('path');
 
 console.log('[init] RESEND_API_KEY présente:', !!process.env.RESEND_API_KEY);
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-const logoPath = path.join(__dirname, 'logo-dromy.jpg');
-let logoBase64 = '';
-try {
-  logoBase64 = `data:image/jpeg;base64,${fs.readFileSync(logoPath).toString('base64')}`;
-  console.log('[init] Logo chargé');
-} catch (e) {
-  console.warn('[init] Logo introuvable, emails sans logo:', e.message);
-}
+const LOGO_URL = 'https://raw.githubusercontent.com/juliensargin-svg/dromy-webhook/main/logo-dromy.jpg';
+console.log('[init] Logo URL:', LOGO_URL);
 
 
 const app = express();
@@ -93,7 +85,7 @@ function buildEmailHtml({ ref, address, completedAt, photoUrl, signatureUrl, sig
 <body>
   <div class="container">
     <div class="header">
-      <img src="${logoBase64}" alt="Dromy" />
+      <img src="${LOGO_URL}" alt="Dromy" />
       <h1>Confirmation de livraison</h1>
     </div>
     <div class="body">
