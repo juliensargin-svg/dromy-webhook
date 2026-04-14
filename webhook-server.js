@@ -188,7 +188,17 @@ app.post('/webhook/onfleet', async (req, res) => {
       to: ['julien.sargin@gmail.com'],
       cc: ['oweis@dromy.fr'],
       subject: `⚠️ Erreur webhook Dromy — ${notes}`,
-      html: `<p>Une erreur s'est produite lors de l'envoi de l'email de confirmation pour <strong>${notes}</strong>.</p><p><strong>Erreur :</strong> ${err.message}</p><p><strong>Destinataire :</strong> ${recipientEmail}</p>`,
+      html: `
+        <p>Bonjour,</p>
+        <p>L'email de confirmation de livraison n'a <strong>pas pu être envoyé</strong> au client suite à une erreur technique.</p>
+        <table style="border-collapse:collapse;width:100%;max-width:500px;margin:16px 0;">
+          <tr><td style="padding:8px;background:#f5f5f5;font-weight:bold;width:40%">Référence</td><td style="padding:8px;border:1px solid #eee">${notes}</td></tr>
+          <tr><td style="padding:8px;background:#f5f5f5;font-weight:bold">Destinataire visé</td><td style="padding:8px;border:1px solid #eee">${recipientEmail}</td></tr>
+          <tr><td style="padding:8px;background:#f5f5f5;font-weight:bold">Cause de l'erreur</td><td style="padding:8px;border:1px solid #eee;color:#c0392b">${err.message}</td></tr>
+        </table>
+        <p><strong>Action requise :</strong> contacter manuellement le client ou vérifier la configuration du webhook.</p>
+        <p style="color:#888;font-size:12px">Ce message est généré automatiquement par le webhook Dromy.</p>
+      `,
     }).catch(e => console.error('[webhook] Erreur alerte:', e.message));
     return res.status(500).json({ error: 'Email send failed', detail: err.message });
   }
