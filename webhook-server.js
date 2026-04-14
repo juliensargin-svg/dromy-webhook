@@ -172,13 +172,16 @@ app.post('/webhook/onfleet', async (req, res) => {
     ? `${ONFLEET_CDN}/${cd.signatureUploadId}/282x.png`
     : null;
 
+  const recipientEmail = task.recipients?.[0]?.notes?.trim() || process.env.EMAIL_TO;
+  console.log(`[webhook] Destinataire : ${recipientEmail}`);
+
   const subject = `Livraison du ${new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Europe/Paris' })} Bene Bono effectuée`;
   const html = buildEmailHtml({ ref: notes, address, completedAt, photoUrl, signatureUrl, signatureText: cd.signatureText || null });
 
   try {
     const { data, error } = await resend.emails.send({
       from: process.env.EMAIL_FROM || 'Dromy Livraisons <onboarding@resend.dev>',
-      to: [process.env.EMAIL_TO],
+      to: [recipientEmail],
       cc: process.env.SMTP_CC ? [process.env.SMTP_CC] : undefined,
       subject,
       html,
