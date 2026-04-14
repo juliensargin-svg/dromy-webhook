@@ -25,10 +25,11 @@ app.use(express.json());
 const NOTES_PATTERN = /Bene\s+Bono\s+\d+/i;
 const ONFLEET_CDN = 'https://d15p8tr8p0vffz.cloudfront.net';
 
+const SMTP_PORT = Number(process.env.SMTP_PORT) || 465;
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
-  port: Number(process.env.SMTP_PORT) || 587,
-  secure: Number(process.env.SMTP_PORT) === 465,
+  port: SMTP_PORT,
+  secure: SMTP_PORT === 465,
   family: 4,
   auth: {
     user: process.env.SMTP_USER,
