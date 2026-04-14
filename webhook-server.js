@@ -1,4 +1,6 @@
-require('dotenv').config();
+console.log('[env] SMTP_PORT avant dotenv:', process.env.SMTP_PORT);
+require('dotenv').config({ override: false });
+console.log('[env] SMTP_PORT après dotenv:', process.env.SMTP_PORT);
 const express = require('express');
 const nodemailer = require('nodemailer');
 const fs = require('fs');
