@@ -176,6 +176,11 @@ app.post('/webhook/onfleet', async (req, res) => {
     return res.status(200).json({ skipped: true, reason: 'notes pattern mismatch' });
   }
 
+  // Pour taskCompleted, attendre que l'API Onfleet ait fini de traiter photos/signature
+  if (triggerId === 3) {
+    await new Promise(resolve => setTimeout(resolve, 5000));
+  }
+
   let task;
   try {
     task = await fetchOnfleetTask(id);
