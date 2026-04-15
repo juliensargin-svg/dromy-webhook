@@ -163,6 +163,7 @@ app.get('/webhook/onfleet', (req, res) => {
 });
 
 app.post('/webhook/onfleet', async (req, res) => {
+  console.log('[webhook] body complet:', JSON.stringify(req.body));
   const { taskId, trigger, data } = req.body;
 
   // Onfleet webhook shape: { taskId, trigger, data: { task: {...} } }
