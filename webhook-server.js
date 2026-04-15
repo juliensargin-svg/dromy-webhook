@@ -196,7 +196,8 @@ app.post('/webhook/onfleet', async (req, res) => {
   const cc = process.env.SMTP_CC ? [process.env.SMTP_CC] : undefined;
 
   // taskStarted (trigger 0) — email de tracking
-  if (trigger === 0) {
+  console.log(`[webhook] trigger reçu:`, trigger, typeof trigger);
+  if (Number(trigger) === 0) {
     const trackingUrl = `https://onf.lt/${task.shortId}`;
     const etaMinutes = task.eta ? Math.round((task.eta - Date.now()) / 60000) : null;
     const subject = `Votre livraison Bene Bono du ${new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Europe/Paris' })} est en route`;
