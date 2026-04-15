@@ -223,12 +223,7 @@ app.post('/webhook/onfleet', async (req, res) => {
     ? [addr.number, addr.street, addr.city, addr.country].filter(Boolean).join(', ')
     : 'Adresse inconnue';
 
-  const webhookCd = webhookTask?.completionDetails;
-  console.log('[webhook] completionDetails payload:', JSON.stringify(webhookCd));
-  console.log('[webhook] completionDetails API:', JSON.stringify(task.completionDetails));
-  const cd = (webhookCd?.time || webhookCd?.photoUploadIds?.length || webhookCd?.photoUploadId || webhookCd?.signatureUploadId)
-    ? webhookCd
-    : (task.completionDetails || {});
+  const cd = task.completionDetails || {};
   const completedAt = cd.time ? formatDate(cd.time) : 'N/A';
   const photoUploadId = cd.photoUploadIds?.[0] || cd.photoUploadId;
   const photoUrl = photoUploadId ? `${ONFLEET_CDN}/${photoUploadId}/800x.png` : null;
