@@ -176,15 +176,28 @@ app.post('/webhook/onfleet', async (req, res) => {
     return res.status(200).json({ skipped: true, reason: 'notes pattern mismatch' });
   }
 
-  // Pour taskCompleted, attendre que l'API Onfleet ait fini de traiter photos/signature
-  if (triggerId === 3) {
-    await new Promise(resolve => setTimeout(resolve, 5000));
-  }
-
   let task;
   try {
     task = await fetchOnfleetTask(id);
     console.log(`[onfleet] Tâche récupérée : ${task.id}, triggerId: ${triggerId}`);
+
+    // Pour taskCompleted, attendre que les photos soient disponibles dans l'API
+    if (triggerId === 3) {
+      const MAX_ATTEMPTS = 5;
+      const DELAY = 2000;
+      for (let i = 0; i < MAX_ATTEMPTS; i++) {
+        const cd = task.completionDetails || {};
+        const hasPhoto = cd.photoUploadIds?.[0] || cd.photoUploadId;
+        const hasSignature = cd.signatureUploadId;
+        if (hasPhoto || hasSignature) {
+          console.log(`[onfleet] Photos dispo après ${i * DELAY / 1000}s`);
+          break;
+        }
+        console.log(`[onfleet] Photos pas encore dispo, attente ${DELAY / 1000}s... (tentative ${i + 1}/${MAX_ATTEMPTS})`);
+        await new Promise(resolve => setTimeout(resolve, DELAY));
+        task = await fetchOnfleetTask(id);
+      }
+    }
   } catch (err) {
     console.error('[onfleet] Erreur API:', err.message);
     return res.status(502).json({ error: 'Onfleet API error', detail: err.message });
