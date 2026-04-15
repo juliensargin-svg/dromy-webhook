@@ -227,6 +227,8 @@ app.post('/webhook/onfleet', async (req, res) => {
   const completedAt = cd.time ? formatDate(cd.time) : 'N/A';
   const photoUploadId = cd.photoUploadIds?.[0] || cd.photoUploadId;
   const photoUrl = photoUploadId ? `${ONFLEET_CDN}/${photoUploadId}/800x.png` : null;
+  console.log('[webhook] photoUploadId:', photoUploadId, '| signatureUploadId:', cd.signatureUploadId);
+  console.log('[webhook] photoUrl:', photoUrl);
   const signatureUrl = cd.signatureUploadId ? `${ONFLEET_CDN}/${cd.signatureUploadId}/282x.png` : null;
 
   const subject = `Livraison du ${new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Europe/Paris' })} Bene Bono effectuée`;
