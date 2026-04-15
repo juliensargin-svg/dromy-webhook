@@ -224,6 +224,8 @@ app.post('/webhook/onfleet', async (req, res) => {
     : 'Adresse inconnue';
 
   const webhookCd = webhookTask?.completionDetails;
+  console.log('[webhook] completionDetails payload:', JSON.stringify(webhookCd));
+  console.log('[webhook] completionDetails API:', JSON.stringify(task.completionDetails));
   const cd = (webhookCd?.time || webhookCd?.photoUploadIds?.length || webhookCd?.photoUploadId || webhookCd?.signatureUploadId)
     ? webhookCd
     : (task.completionDetails || {});
