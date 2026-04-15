@@ -217,12 +217,16 @@ app.post('/webhook/onfleet', async (req, res) => {
   }
 
   // taskCompleted (trigger 3) — email de confirmation
+  // Priorité aux completionDetails du payload webhook (plus frais que l'API re-fetch)
   const addr = task.destination?.address;
   const address = addr
     ? [addr.number, addr.street, addr.city, addr.country].filter(Boolean).join(', ')
     : 'Adresse inconnue';
 
-  const cd = task.completionDetails || {};
+  const webhookCd = webhookTask?.completionDetails;
+  const cd = (webhookCd?.time || webhookCd?.photoUploadIds?.length || webhookCd?.photoUploadId || webhookCd?.signatureUploadId)
+    ? webhookCd
+    : (task.completionDetails || {});
   const completedAt = cd.time ? formatDate(cd.time) : 'N/A';
   const photoUploadId = cd.photoUploadIds?.[0] || cd.photoUploadId;
   const photoUrl = photoUploadId ? `${ONFLEET_CDN}/${photoUploadId}/800x.png` : null;
