@@ -199,7 +199,7 @@ app.post('/webhook/onfleet', async (req, res) => {
   if (trigger === 0) {
     const trackingUrl = `https://onf.lt/${task.shortId}`;
     const etaMinutes = task.eta ? Math.round((task.eta - Date.now()) / 60000) : null;
-    const subject = `Votre livraison Bene Bono est en route`;
+    const subject = `Votre livraison Bene Bono du ${new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Europe/Paris' })} est en route`;
     const html = buildTrackingEmailHtml({ ref: notes, trackingUrl, etaMinutes });
 
     try {
