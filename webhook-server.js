@@ -49,11 +49,7 @@ function formatDate(timestamp) {
   });
 }
 
-function buildTrackingEmailHtml({ ref, trackingUrl, etaMinutes }) {
-  const etaText = etaMinutes != null
-    ? `il arrive dans <strong>${etaMinutes} min</strong>`
-    : `votre livreur est en route`;
-
+function buildTrackingEmailHtml({ ref, trackingUrl }) {
   return `
 <!DOCTYPE html>
 <html lang="fr">
@@ -80,7 +76,7 @@ function buildTrackingEmailHtml({ ref, trackingUrl, etaMinutes }) {
     <div class="body">
       <span class="badge">🚚 En cours de livraison</span>
       <p style="margin: 0 0 8px; font-size: 15px; color: #444;">Bonjour,</p>
-      <p style="margin: 0 0 24px; font-size: 15px; color: #444;">Votre livraison Bene Bono est en route, ${etaText}.</p>
+      <p style="margin: 0 0 24px; font-size: 15px; color: #444;">Votre livraison Bene Bono est en route. Suivez votre livraison sur le lien ci-dessous.</p>
       <p style="margin: 0; font-size: 13px; color: #888; text-align: center;">Référence : ${ref}</p>
       <a href="${trackingUrl}" class="btn">Suivre ma livraison</a>
     </div>
@@ -202,7 +198,7 @@ app.post('/webhook/onfleet', async (req, res) => {
     const etaMs = task.estimatedArrivalTime || task.estimatedCompletionTime;
     const etaMinutes = etaMs ? Math.round((etaMs - Date.now()) / 60000) : null;
     const subject = `Votre livraison Bene Bono du ${new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Europe/Paris' })} est en route`;
-    const html = buildTrackingEmailHtml({ ref: notes, trackingUrl, etaMinutes });
+    const html = buildTrackingEmailHtml({ ref: notes, trackingUrl });
 
     try {
       const { data: sent, error } = await resend.emails.send({ from, to: [recipientEmail], cc, subject, html });
