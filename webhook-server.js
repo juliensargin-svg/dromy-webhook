@@ -183,19 +183,32 @@ app.post('/webhook/onfleet', async (req, res) => {
 
     // Pour taskCompleted, attendre que les photos soient disponibles dans l'API
     if (triggerId === 3) {
-      const MAX_ATTEMPTS = 5;
-      const DELAY = 2000;
+      const MAX_ATTEMPTS = 20;
+      const DELAY = 3000;
+      let photosReady = false;
       for (let i = 0; i < MAX_ATTEMPTS; i++) {
         const cd = task.completionDetails || {};
         const hasPhoto = cd.photoUploadIds?.[0] || cd.photoUploadId;
         const hasSignature = cd.signatureUploadId;
         if (hasPhoto || hasSignature) {
           console.log(`[onfleet] Photos dispo après ${i * DELAY / 1000}s`);
+          photosReady = true;
           break;
         }
         console.log(`[onfleet] Photos pas encore dispo, attente ${DELAY / 1000}s... (tentative ${i + 1}/${MAX_ATTEMPTS})`);
         await new Promise(resolve => setTimeout(resolve, DELAY));
         task = await fetchOnfleetTask(id);
+      }
+      if (!photosReady) {
+        console.error(`[onfleet] Photos toujours indisponibles après ${MAX_ATTEMPTS * DELAY / 1000}s`);
+        await resend.emails.send({
+          from: process.env.EMAIL_FROM || 'Dromy Livraisons <onboarding@resend.dev>',
+          to: ['julien.sargin@gmail.com'],
+          cc: ['oweis@dromy.fr'],
+          subject: `⚠️ Photos non disponibles — ${notes}`,
+          html: `<p>Les photos de la livraison <strong>${notes}</strong> n'ont pas été disponibles après 60 secondes.</p><p>L'email client n'a pas été envoyé. Vérifier manuellement sur Onfleet.</p>`,
+        }).catch(e => console.error('[webhook] Erreur alerte photos:', e.message));
+        return res.status(200).json({ skipped: true, reason: 'photos unavailable after timeout' });
       }
     }
   } catch (err) {
