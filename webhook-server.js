@@ -163,11 +163,10 @@ app.get('/webhook/onfleet', (req, res) => {
 });
 
 app.post('/webhook/onfleet', async (req, res) => {
-  console.log('[webhook] body complet:', JSON.stringify(req.body));
-  const { taskId, trigger, data } = req.body;
+  const { taskId, triggerId, data } = req.body;
 
-  // Onfleet webhook shape: { taskId, trigger, data: { task: {...} } }
-  // trigger: 0 = taskStarted, 3 = taskCompleted
+  // Onfleet webhook shape: { taskId, triggerId, data: { task: {...} } }
+  // triggerId: 0 = taskStarted, 3 = taskCompleted
   const webhookTask = data?.task;
   if (!webhookTask && !taskId) {
     return res.status(400).json({ error: 'Missing task in payload' });
@@ -184,7 +183,7 @@ app.post('/webhook/onfleet', async (req, res) => {
   let task;
   try {
     task = await fetchOnfleetTask(id);
-    console.log(`[onfleet] Tâche récupérée : ${task.id}, trigger: ${trigger}`);
+    console.log(`[onfleet] Tâche récupérée : ${task.id}, triggerId: ${triggerId}`);
   } catch (err) {
     console.error('[onfleet] Erreur API:', err.message);
     return res.status(502).json({ error: 'Onfleet API error', detail: err.message });
@@ -197,10 +196,11 @@ app.post('/webhook/onfleet', async (req, res) => {
   const cc = process.env.SMTP_CC ? [process.env.SMTP_CC] : undefined;
 
   // taskStarted (trigger 0) — email de tracking
-  console.log(`[webhook] trigger reçu:`, trigger, typeof trigger);
-  if (Number(trigger) === 0) {
-    const trackingUrl = `https://onf.lt/${task.shortId}`;
-    const etaMinutes = task.eta ? Math.round((task.eta - Date.now()) / 60000) : null;
+  console.log(`[webhook] triggerId reçu:`, triggerId);
+  if (triggerId === 0) {
+    const trackingUrl = task.trackingURL;
+    const etaMs = task.estimatedArrivalTime || task.estimatedCompletionTime;
+    const etaMinutes = etaMs ? Math.round((etaMs - Date.now()) / 60000) : null;
     const subject = `Votre livraison Bene Bono du ${new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Europe/Paris' })} est en route`;
     const html = buildTrackingEmailHtml({ ref: notes, trackingUrl, etaMinutes });
 
