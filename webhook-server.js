@@ -270,14 +270,6 @@ app.post('/webhook/onfleet', async (req, res) => {
       }).catch(e => console.error('[webhook] Erreur alerte:', e.message));
     }
 
-    try {
-      await sendSms(recipientPhone,
-        `Bonjour, votre livraison Bene Bono est en route. Suivez-la ici : ${trackingUrl}`
-      );
-    } catch (err) {
-      console.error('[webhook] Erreur SMS tracking:', err.message);
-    }
-
     return res.status(200).json({ sent: true });
   }
 
