@@ -8,8 +8,14 @@ process.on('unhandledRejection', (reason) => {
 require('dotenv').config({ override: false });
 const express = require('express');
 const { Resend } = require('resend');
+const twilio = require('twilio');
 
 console.log('[init] RESEND_API_KEY présente:', !!process.env.RESEND_API_KEY);
+console.log('[init] TWILIO_ACCOUNT_SID présente:', !!process.env.TWILIO_ACCOUNT_SID);
+
+const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
+  ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
+  : null;
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
@@ -150,6 +156,24 @@ function buildEmailHtml({ ref, address, completedAt, photoUrl, signatureUrl, sig
 </html>`;
 }
 
+async function sendSms(to, body) {
+  if (!twilioClient) {
+    console.warn('[sms] Twilio non configuré, SMS ignoré');
+    return;
+  }
+  if (!to) {
+    console.warn('[sms] Pas de numéro de téléphone, SMS ignoré');
+    return;
+  }
+  const message = await twilioClient.messages.create({
+    from: process.env.TWILIO_FROM,
+    to,
+    body,
+  });
+  console.log(`[sms] Envoyé à ${to} — sid: ${message.sid}`);
+  return message;
+}
+
 app.get('/', (req, res) => {
   res.send('OK');
 });
@@ -231,11 +255,12 @@ app.post('/webhook/onfleet', async (req, res) => {
     const subject = `Votre livraison Bene Bono du ${new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Europe/Paris' })} est en route`;
     const html = buildTrackingEmailHtml({ ref: notes, trackingUrl });
 
+    const recipientPhone = task.recipients?.[0]?.phone?.number || null;
+
     try {
       const { data: sent, error } = await resend.emails.send({ from, to: [recipientEmail], cc, subject, html });
       if (error) throw new Error(JSON.stringify(error));
       console.log(`[webhook] Email tracking envoyé pour ${notes} — id: ${sent.id}`);
-      return res.status(200).json({ sent: true, id: sent.id });
     } catch (err) {
       console.error('[webhook] Erreur email tracking:', err.message);
       await resend.emails.send({
@@ -243,8 +268,17 @@ app.post('/webhook/onfleet', async (req, res) => {
         subject: `⚠️ Erreur tracking Dromy — ${notes}`,
         html: `<p>Erreur lors de l'envoi de l'email de tracking pour <strong>${notes}</strong>.</p><p><strong>Destinataire :</strong> ${recipientEmail}</p><p><strong>Erreur :</strong> ${err.message}</p>`,
       }).catch(e => console.error('[webhook] Erreur alerte:', e.message));
-      return res.status(500).json({ error: 'Email send failed', detail: err.message });
     }
+
+    try {
+      await sendSms(recipientPhone,
+        `Bonjour, votre livraison Bene Bono est en route. Suivez-la ici : ${trackingUrl}`
+      );
+    } catch (err) {
+      console.error('[webhook] Erreur SMS tracking:', err.message);
+    }
+
+    return res.status(200).json({ sent: true });
   }
 
   // taskCompleted (trigger 3) — email de confirmation
@@ -262,6 +296,7 @@ app.post('/webhook/onfleet', async (req, res) => {
   console.log('[webhook] photoUrl:', photoUrl);
   const signatureUrl = cd.signatureUploadId ? `${ONFLEET_CDN}/${cd.signatureUploadId}/282x.png` : null;
 
+  const recipientPhone = task.recipients?.[0]?.phone?.number || null;
   const subject = `Livraison du ${new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Europe/Paris' })} Bene Bono effectuée`;
   const html = buildEmailHtml({ ref: notes, address, completedAt, photoUrl, signatureUrl, signatureText: cd.signatureText || null });
 
@@ -269,7 +304,6 @@ app.post('/webhook/onfleet', async (req, res) => {
     const { data: sent, error } = await resend.emails.send({ from, to: [recipientEmail], cc, subject, html });
     if (error) throw new Error(JSON.stringify(error));
     console.log(`[webhook] Email confirmation envoyé pour ${notes} — id: ${sent.id}`);
-    return res.status(200).json({ sent: true, id: sent.id });
   } catch (err) {
     console.error('[webhook] Erreur envoi email:', err.message);
     await resend.emails.send({
@@ -289,6 +323,16 @@ app.post('/webhook/onfleet', async (req, res) => {
     }).catch(e => console.error('[webhook] Erreur alerte:', e.message));
     return res.status(500).json({ error: 'Email send failed', detail: err.message });
   }
+
+  try {
+    await sendSms(recipientPhone,
+      `Bonjour, votre livraison Bene Bono a bien été effectuée le ${completedAt} à ${address}.`
+    );
+  } catch (err) {
+    console.error('[webhook] Erreur SMS confirmation:', err.message);
+  }
+
+  return res.status(200).json({ sent: true });
 });
 
 const PORT = process.env.PORT || 8080;
