@@ -255,7 +255,7 @@ app.post('/webhook/onfleet', async (req, res) => {
     const subject = `Votre livraison Bene Bono du ${new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Europe/Paris' })} est en route`;
     const html = buildTrackingEmailHtml({ ref: notes, trackingUrl });
 
-    const recipientPhone = task.recipients?.[0]?.phone?.number || null;
+    const recipientPhone = task.recipients?.[0]?.phone || null;
 
     try {
       const { data: sent, error } = await resend.emails.send({ from, to: [recipientEmail], cc, subject, html });
@@ -288,7 +288,7 @@ app.post('/webhook/onfleet', async (req, res) => {
   console.log('[webhook] photoUrl:', photoUrl);
   const signatureUrl = cd.signatureUploadId ? `${ONFLEET_CDN}/${cd.signatureUploadId}/282x.png` : null;
 
-  const recipientPhone = task.recipients?.[0]?.phone?.number || null;
+  const recipientPhone = task.recipients?.[0]?.phone || null;
   const subject = `Livraison du ${new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Europe/Paris' })} Bene Bono effectuée`;
   const html = buildEmailHtml({ ref: notes, address, completedAt, photoUrl, signatureUrl, signatureText: cd.signatureText || null });
 
