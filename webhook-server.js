@@ -276,9 +276,11 @@ app.post('/webhook/onfleet', async (req, res) => {
   // taskCompleted (trigger 3) — email de confirmation
   // Priorité aux completionDetails du payload webhook (plus frais que l'API re-fetch)
   const addr = task.destination?.address;
-  const address = addr
-    ? [addr.number, addr.street, addr.city, addr.country].filter(Boolean).join(', ')
+  const addressLine1 = addr
+    ? [addr.number, addr.street, addr.postalCode, addr.city].filter(Boolean).join(', ')
     : 'Adresse inconnue';
+  const addressLine2 = addr?.apartment || null;
+  const address = addressLine2 ? `${addressLine1}, ${addressLine2}` : addressLine1;
 
   const cd = task.completionDetails || {};
   const completedAt = cd.time ? formatDate(cd.time) : 'N/A';
@@ -317,9 +319,17 @@ app.post('/webhook/onfleet', async (req, res) => {
   }
 
   try {
-    await sendSms(recipientPhone,
-      `Bonjour, votre livraison Bene Bono a bien été effectuée le ${completedAt} à ${address}.`
-    );
+    const smsBody = [
+      `Cher Client,`,
+      ``,
+      `Votre commande Bene Bono a été livrée en point relais, vous pouvez donc dès à présent la récupérer. Votre livraison a bien été effectuée à l'adresse et au point relais suivant :`,
+      ``,
+      addressLine1,
+      addressLine2,
+      ``,
+      `Cordialement,`,
+    ].filter(line => line !== null && line !== undefined).join('\n');
+    await sendSms(recipientPhone, smsBody);
   } catch (err) {
     console.error('[webhook] Erreur SMS confirmation:', err.message);
     await resend.emails.send({
