@@ -320,15 +320,10 @@ app.post('/webhook/onfleet', async (req, res) => {
 
   try {
     const smsBody = [
-      `Cher Client,`,
-      ``,
-      `Votre commande Bene Bono a été livrée en point relais, vous pouvez donc dès à présent la récupérer. Votre livraison a bien été effectuée à l'adresse et au point relais suivant :`,
-      ``,
+      `Cher Client, Votre commande Bene Bono a été livrée au point relais suivant :`,
       addressLine1,
       addressLine2,
-      ``,
-      `Cordialement,`,
-    ].filter(line => line !== null && line !== undefined).join('\n');
+    ].filter(Boolean).join('\n');
     await sendSms(recipientPhone, smsBody);
   } catch (err) {
     console.error('[webhook] Erreur SMS confirmation:', err.message);
