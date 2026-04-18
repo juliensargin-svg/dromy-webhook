@@ -322,6 +322,22 @@ app.post('/webhook/onfleet', async (req, res) => {
     );
   } catch (err) {
     console.error('[webhook] Erreur SMS confirmation:', err.message);
+    await resend.emails.send({
+      from,
+      to: ['julien.sargin@gmail.com'],
+      cc: ['oweis@dromy.fr'],
+      subject: `⚠️ Erreur SMS Dromy — ${notes}`,
+      html: `
+        <p>Bonjour,</p>
+        <p>Le SMS de confirmation de livraison n'a <strong>pas pu être envoyé</strong> au client.</p>
+        <table style="border-collapse:collapse;width:100%;max-width:500px;margin:16px 0;">
+          <tr><td style="padding:8px;background:#f5f5f5;font-weight:bold;width:40%">Référence</td><td style="padding:8px;border:1px solid #eee">${notes}</td></tr>
+          <tr><td style="padding:8px;background:#f5f5f5;font-weight:bold">Numéro visé</td><td style="padding:8px;border:1px solid #eee">${recipientPhone || 'inconnu'}</td></tr>
+          <tr><td style="padding:8px;background:#f5f5f5;font-weight:bold">Cause de l'erreur</td><td style="padding:8px;border:1px solid #eee;color:#c0392b">${err.message}</td></tr>
+        </table>
+        <p style="color:#888;font-size:12px">Ce message est généré automatiquement par le webhook Dromy.</p>
+      `,
+    }).catch(e => console.error('[webhook] Erreur alerte SMS:', e.message));
   }
 
   return res.status(200).json({ sent: true });
