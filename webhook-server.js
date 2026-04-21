@@ -315,7 +315,6 @@ app.post('/webhook/onfleet', async (req, res) => {
         <p style="color:#888;font-size:12px">Ce message est généré automatiquement par le webhook Dromy.</p>
       `,
     }).catch(e => console.error('[webhook] Erreur alerte:', e.message));
-    return res.status(500).json({ error: 'Email send failed', detail: err.message });
   }
 
   try {
