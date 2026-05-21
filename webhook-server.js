@@ -240,7 +240,7 @@ app.get('/sms-status', async (req, res) => {
       phone,
       sms: true,
       status: latest.status,
-      sentAt: latest.date_sent,
+      sentAt: new Date(latest.date_sent).toLocaleString('fr-FR', { timeZone: 'Europe/Paris', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
       body: latest.body,
     });
 
