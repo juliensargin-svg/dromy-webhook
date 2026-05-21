@@ -201,7 +201,8 @@ app.get('/sms-status', async (req, res) => {
       { headers: { Authorization: `Basic ${auth}` } }
     );
     if (!tasksRes.ok) throw new Error(`Onfleet API ${tasksRes.status}`);
-    const tasks = await tasksRes.json();
+    const tasksData = await tasksRes.json();
+    const tasks = Array.isArray(tasksData) ? tasksData : (tasksData.tasks || []);
 
     const task = tasks.find(t => t.notes && t.notes.toLowerCase().includes(ref.toLowerCase()));
     if (!task) {
