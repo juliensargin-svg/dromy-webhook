@@ -182,6 +182,68 @@ app.get('/webhook/onfleet', (req, res) => {
   res.send(req.query.check || '');
 });
 
+app.get('/sms-status', async (req, res) => {
+  const { ref, token } = req.query;
+
+  if (process.env.CHECK_TOKEN && token !== process.env.CHECK_TOKEN) {
+    return res.status(401).json({ error: 'Non autorisé' });
+  }
+  if (!ref) {
+    return res.status(400).json({ error: 'Paramètre ref manquant. Ex: /sms-status?ref=Bene+Bono+2244090' });
+  }
+
+  try {
+    // Cherche la tâche Onfleet sur les 30 derniers jours
+    const from = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    const auth = Buffer.from(`${process.env.ONFLEET_API_KEY}:`).toString('base64');
+    const tasksRes = await fetch(
+      `https://onfleet.com/api/v2/tasks/all?from=${from}`,
+      { headers: { Authorization: `Basic ${auth}` } }
+    );
+    if (!tasksRes.ok) throw new Error(`Onfleet API ${tasksRes.status}`);
+    const tasks = await tasksRes.json();
+
+    const task = tasks.find(t => t.notes && t.notes.toLowerCase().includes(ref.toLowerCase()));
+    if (!task) {
+      return res.status(404).json({ found: false, message: `Aucune tâche trouvée pour la référence "${ref}" dans les 30 derniers jours` });
+    }
+
+    const phone = task.recipients?.[0]?.phone;
+    if (!phone) {
+      return res.status(200).json({ found: true, sms: false, message: 'Tâche trouvée mais aucun numéro de téléphone associé' });
+    }
+
+    // Cherche les SMS Twilio envoyés à ce numéro
+    const twilioAuth = Buffer.from(`${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`).toString('base64');
+    const messagesRes = await fetch(
+      `https://api.twilio.com/2010-04-01/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Messages.json?To=${encodeURIComponent(phone)}&From=${encodeURIComponent(process.env.TWILIO_FROM)}&PageSize=5`,
+      { headers: { Authorization: `Basic ${twilioAuth}` } }
+    );
+    if (!messagesRes.ok) throw new Error(`Twilio API ${messagesRes.status}`);
+    const messagesData = await messagesRes.json();
+    const messages = messagesData.messages || [];
+
+    if (messages.length === 0) {
+      return res.status(200).json({ found: true, phone, sms: false, message: 'Aucun SMS trouvé pour ce destinataire' });
+    }
+
+    const latest = messages[0];
+    return res.status(200).json({
+      found: true,
+      ref: task.notes,
+      phone,
+      sms: true,
+      status: latest.status,
+      sentAt: latest.date_sent,
+      body: latest.body,
+    });
+
+  } catch (err) {
+    console.error('[sms-status] Erreur:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/webhook/onfleet', async (req, res) => {
   const { taskId, triggerId, data } = req.body;
 
