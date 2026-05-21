@@ -194,7 +194,8 @@ app.get('/email-status', async (req, res) => {
     let offset = 0;
     let hasMore = true;
 
-    while (hasMore) {
+    while (hasMore && offset < 500) {
+      if (offset > 0) await new Promise(r => setTimeout(r, 300));
       const emailsRes = await fetch(`https://api.resend.com/emails?limit=100&offset=${offset}`, {
         headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}` },
       });
