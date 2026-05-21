@@ -19,6 +19,9 @@ const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_T
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
+// Log en mémoire des emails envoyés (max 500 entrées)
+const emailLog = [];
+
 const LOGO_URL = 'https://raw.githubusercontent.com/juliensargin-svg/dromy-webhook/main/logo-dromy.jpg';
 console.log('[init] Logo URL:', LOGO_URL);
 
@@ -188,43 +191,20 @@ app.get('/email-status', async (req, res) => {
     return res.status(400).json({ error: 'Paramètre email manquant. Ex: /email-status?email=client@gmail.com' });
   }
 
-  try {
-    const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
-    let allEmails = [];
-    let offset = 0;
-    let hasMore = true;
-
-    while (hasMore && offset < 2000) {
-      if (offset > 0) await new Promise(r => setTimeout(r, 300));
-      const emailsRes = await fetch(`https://api.resend.com/emails?limit=100&offset=${offset}`, {
-        headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}` },
-      });
-      if (!emailsRes.ok) throw new Error(`Resend API ${emailsRes.status}`);
-      const { data: emails, has_more } = await emailsRes.json();
-      allEmails = allEmails.concat(emails);
-      const oldest = new Date(emails[emails.length - 1]?.created_at).getTime();
-      hasMore = has_more && oldest > thirtyDaysAgo;
-      offset += 100;
-    }
-
-    const matches = allEmails.filter(e => e.to?.some(t => t.toLowerCase() === email.toLowerCase()));
-    if (matches.length === 0) {
-      return res.status(200).json({ email, found: false, message: 'Aucun email trouvé pour cette adresse' });
-    }
-
-    return res.status(200).json({
-      email,
-      found: true,
-      emails: matches.map(e => ({
-        subject: e.subject,
-        status: e.last_event,
-        sentAt: new Date(e.created_at).toLocaleString('fr-FR', { timeZone: 'Europe/Paris', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
-      })),
-    });
-  } catch (err) {
-    console.error('[email-status] Erreur:', err.message);
-    return res.status(500).json({ error: err.message });
+  const matches = emailLog.filter(e => e.to.toLowerCase() === email.toLowerCase());
+  if (matches.length === 0) {
+    return res.status(200).json({ email, found: false, message: 'Aucun email trouvé (log depuis le dernier démarrage du serveur)' });
   }
+  return res.status(200).json({
+    email,
+    found: true,
+    emails: matches.map(e => ({
+      ref: e.ref,
+      subject: e.subject,
+      status: e.status,
+      sentAt: new Date(e.sentAt).toLocaleString('fr-FR', { timeZone: 'Europe/Paris', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
+    })),
+  });
 });
 
 app.get('/sms-status', async (req, res) => {
@@ -344,6 +324,8 @@ app.post('/webhook/onfleet', async (req, res) => {
       const { data: sent, error } = await resend.emails.send({ from, to: [recipientEmail], cc, subject, html });
       if (error) throw new Error(JSON.stringify(error));
       console.log(`[webhook] Email tracking envoyé pour ${notes} — id: ${sent.id}`);
+      emailLog.unshift({ to: recipientEmail, subject, sentAt: new Date().toISOString(), status: 'delivered', ref: notes });
+      if (emailLog.length > 500) emailLog.pop();
     } catch (err) {
       console.error('[webhook] Erreur email tracking:', err.message);
       await resend.emails.send({
