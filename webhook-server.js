@@ -267,28 +267,6 @@ app.post('/webhook/onfleet', async (req, res) => {
     task = await fetchOnfleetTask(id);
     console.log(`[onfleet] Tâche récupérée : ${task.id}, triggerId: ${triggerId}`);
 
-    // Pour taskCompleted, attendre que les photos soient disponibles dans l'API
-    if (triggerId === 3) {
-      const MAX_ATTEMPTS = 20;
-      const DELAY = 3000;
-      let photosReady = false;
-      for (let i = 0; i < MAX_ATTEMPTS; i++) {
-        const cd = task.completionDetails || {};
-        const hasPhoto = cd.photoUploadIds?.[0] || cd.photoUploadId;
-        const hasSignature = cd.signatureUploadId;
-        if (hasPhoto || hasSignature) {
-          console.log(`[onfleet] Photos dispo après ${i * DELAY / 1000}s`);
-          photosReady = true;
-          break;
-        }
-        console.log(`[onfleet] Photos pas encore dispo, attente ${DELAY / 1000}s... (tentative ${i + 1}/${MAX_ATTEMPTS})`);
-        await new Promise(resolve => setTimeout(resolve, DELAY));
-        task = await fetchOnfleetTask(id);
-      }
-      if (!photosReady) {
-        console.log(`[onfleet] Pas de photos après ${MAX_ATTEMPTS * DELAY / 1000}s, envoi de l'email sans photos`);
-      }
-    }
   } catch (err) {
     console.error('[onfleet] Erreur API:', err.message);
     return res.status(502).json({ error: 'Onfleet API error', detail: err.message });
@@ -327,49 +305,14 @@ app.post('/webhook/onfleet', async (req, res) => {
     return res.status(200).json({ sent: true });
   }
 
-  // taskCompleted (trigger 3) — email de confirmation
-  // Priorité aux completionDetails du payload webhook (plus frais que l'API re-fetch)
+  // taskCompleted (trigger 3) — SMS uniquement
   const addr = task.destination?.address;
   const addressLine1 = addr
     ? [addr.number, addr.street, addr.postalCode, addr.city].filter(Boolean).join(', ')
     : 'Adresse inconnue';
   const addressLine2 = addr?.apartment || null;
-  const address = addressLine2 ? `${addressLine1}, ${addressLine2}` : addressLine1;
-
-  const cd = task.completionDetails || {};
-  const completedAt = cd.time ? formatDate(cd.time) : 'N/A';
-  const photoUploadId = cd.photoUploadIds?.[0] || cd.photoUploadId;
-  const photoUrl = photoUploadId ? `${ONFLEET_CDN}/${photoUploadId}/800x.png` : null;
-  console.log('[webhook] photoUploadId:', photoUploadId, '| signatureUploadId:', cd.signatureUploadId);
-  console.log('[webhook] photoUrl:', photoUrl);
-  const signatureUrl = cd.signatureUploadId ? `${ONFLEET_CDN}/${cd.signatureUploadId}/282x.png` : null;
 
   const recipientPhone = task.recipients?.[0]?.phone || null;
-  const subject = `Livraison du ${new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Europe/Paris' })} Bene Bono effectuée`;
-  const html = buildEmailHtml({ ref: notes, address, completedAt, photoUrl, signatureUrl, signatureText: cd.signatureText || null });
-
-  try {
-    const { data: sent, error } = await resend.emails.send({ from, to: [recipientEmail], cc, subject, html });
-    if (error) throw new Error(JSON.stringify(error));
-    console.log(`[webhook] Email confirmation envoyé pour ${notes} — id: ${sent.id}`);
-  } catch (err) {
-    console.error('[webhook] Erreur envoi email:', err.message);
-    await resend.emails.send({
-      from, to: ['julien.sargin@gmail.com'], cc: ['oweis@dromy.fr'],
-      subject: `⚠️ Erreur webhook Dromy — ${notes}`,
-      html: `
-        <p>Bonjour,</p>
-        <p>L'email de confirmation de livraison n'a <strong>pas pu être envoyé</strong> au client suite à une erreur technique.</p>
-        <table style="border-collapse:collapse;width:100%;max-width:500px;margin:16px 0;">
-          <tr><td style="padding:8px;background:#f5f5f5;font-weight:bold;width:40%">Référence</td><td style="padding:8px;border:1px solid #eee">${notes}</td></tr>
-          <tr><td style="padding:8px;background:#f5f5f5;font-weight:bold">Destinataire visé</td><td style="padding:8px;border:1px solid #eee">${recipientEmail}</td></tr>
-          <tr><td style="padding:8px;background:#f5f5f5;font-weight:bold">Cause de l'erreur</td><td style="padding:8px;border:1px solid #eee;color:#c0392b">${err.message}</td></tr>
-        </table>
-        <p><strong>Action requise :</strong> contacter manuellement le client ou vérifier la configuration du webhook.</p>
-        <p style="color:#888;font-size:12px">Ce message est généré automatiquement par le webhook Dromy.</p>
-      `,
-    }).catch(e => console.error('[webhook] Erreur alerte:', e.message));
-  }
 
   try {
     const smsBody = [
