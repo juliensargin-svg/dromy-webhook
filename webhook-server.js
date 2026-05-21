@@ -189,13 +189,24 @@ app.get('/email-status', async (req, res) => {
   }
 
   try {
-    const emailsRes = await fetch('https://api.resend.com/emails?limit=100', {
-      headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}` },
-    });
-    if (!emailsRes.ok) throw new Error(`Resend API ${emailsRes.status}`);
-    const { data: emails } = await emailsRes.json();
+    const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    let allEmails = [];
+    let offset = 0;
+    let hasMore = true;
 
-    const matches = emails.filter(e => e.to?.includes(email.toLowerCase()));
+    while (hasMore) {
+      const emailsRes = await fetch(`https://api.resend.com/emails?limit=100&offset=${offset}`, {
+        headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}` },
+      });
+      if (!emailsRes.ok) throw new Error(`Resend API ${emailsRes.status}`);
+      const { data: emails, has_more } = await emailsRes.json();
+      allEmails = allEmails.concat(emails);
+      const oldest = new Date(emails[emails.length - 1]?.created_at).getTime();
+      hasMore = has_more && oldest > thirtyDaysAgo;
+      offset += 100;
+    }
+
+    const matches = allEmails.filter(e => e.to?.some(t => t.toLowerCase() === email.toLowerCase()));
     if (matches.length === 0) {
       return res.status(200).json({ email, found: false, message: 'Aucun email trouvé pour cette adresse' });
     }
