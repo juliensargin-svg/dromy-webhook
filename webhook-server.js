@@ -203,6 +203,8 @@ app.get('/sms-status', async (req, res) => {
     if (!tasksRes.ok) throw new Error(`Onfleet API ${tasksRes.status}`);
     const tasksData = await tasksRes.json();
     const tasks = Array.isArray(tasksData) ? tasksData : (tasksData.tasks || []);
+    console.log('[sms-status] tasks type:', typeof tasksData, '| keys:', Object.keys(tasksData).join(','), '| count:', tasks.length);
+    console.log('[sms-status] sample notes:', tasks.slice(0, 3).map(t => t.notes));
 
     const task = tasks.find(t => t.notes && t.notes.toLowerCase().includes(ref.toLowerCase()));
     if (!task) {
