@@ -182,6 +182,39 @@ app.get('/webhook/onfleet', (req, res) => {
   res.send(req.query.check || '');
 });
 
+app.get('/email-status', async (req, res) => {
+  const { email } = req.query;
+  if (!email) {
+    return res.status(400).json({ error: 'Paramètre email manquant. Ex: /email-status?email=client@gmail.com' });
+  }
+
+  try {
+    const emailsRes = await fetch('https://api.resend.com/emails?limit=100', {
+      headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}` },
+    });
+    if (!emailsRes.ok) throw new Error(`Resend API ${emailsRes.status}`);
+    const { data: emails } = await emailsRes.json();
+
+    const matches = emails.filter(e => e.to?.includes(email.toLowerCase()));
+    if (matches.length === 0) {
+      return res.status(200).json({ email, found: false, message: 'Aucun email trouvé pour cette adresse' });
+    }
+
+    return res.status(200).json({
+      email,
+      found: true,
+      emails: matches.map(e => ({
+        subject: e.subject,
+        status: e.last_event,
+        sentAt: new Date(e.created_at).toLocaleString('fr-FR', { timeZone: 'Europe/Paris', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
+      })),
+    });
+  } catch (err) {
+    console.error('[email-status] Erreur:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/sms-status', async (req, res) => {
   const { ref, phone: phoneParam, token } = req.query;
 
