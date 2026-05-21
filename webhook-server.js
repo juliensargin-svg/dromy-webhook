@@ -183,37 +183,42 @@ app.get('/webhook/onfleet', (req, res) => {
 });
 
 app.get('/sms-status', async (req, res) => {
-  const { ref, token } = req.query;
+  const { ref, phone: phoneParam, token } = req.query;
 
   if (process.env.CHECK_TOKEN && token !== process.env.CHECK_TOKEN) {
     return res.status(401).json({ error: 'Non autorisé' });
   }
-  if (!ref) {
-    return res.status(400).json({ error: 'Paramètre ref manquant. Ex: /sms-status?ref=Bene+Bono+2244090' });
+  if (!ref && !phoneParam) {
+    return res.status(400).json({ error: 'Paramètre ref ou phone manquant. Ex: /sms-status?ref=Bene+Bono+2244090 ou /sms-status?phone=0612345678' });
   }
 
   try {
-    // Cherche la tâche Onfleet sur les 30 derniers jours
-    const from = Date.now() - 30 * 24 * 60 * 60 * 1000;
-    const auth = Buffer.from(`${process.env.ONFLEET_API_KEY}:`).toString('base64');
-    const tasksRes = await fetch(
-      `https://onfleet.com/api/v2/tasks/all?from=${from}`,
-      { headers: { Authorization: `Basic ${auth}` } }
-    );
-    if (!tasksRes.ok) throw new Error(`Onfleet API ${tasksRes.status}`);
-    const tasksData = await tasksRes.json();
-    const tasks = Array.isArray(tasksData) ? tasksData : (tasksData.tasks || []);
-    console.log('[sms-status] tasks type:', typeof tasksData, '| keys:', Object.keys(tasksData).join(','), '| count:', tasks.length);
-    console.log('[sms-status] sample notes:', tasks.slice(0, 3).map(t => t.notes));
+    let phone = phoneParam;
 
-    const task = tasks.find(t => t.notes && t.notes.toLowerCase().includes(ref.toLowerCase()));
-    if (!task) {
-      return res.status(404).json({ found: false, message: `Aucune tâche trouvée pour la référence "${ref}" dans les 30 derniers jours` });
-    }
-
-    const phone = task.recipients?.[0]?.phone;
-    if (!phone) {
-      return res.status(200).json({ found: true, sms: false, message: 'Tâche trouvée mais aucun numéro de téléphone associé' });
+    // Si numéro fourni directement, on normalise en E.164
+    if (phone) {
+      phone = phone.replace(/\s/g, '');
+      if (phone.startsWith('0')) phone = '+33' + phone.slice(1);
+      if (!phone.startsWith('+')) phone = '+33' + phone;
+    } else {
+      // Sinon on cherche la tâche Onfleet par référence
+      const from = Date.now() - 30 * 24 * 60 * 60 * 1000;
+      const auth = Buffer.from(`${process.env.ONFLEET_API_KEY}:`).toString('base64');
+      const tasksRes = await fetch(
+        `https://onfleet.com/api/v2/tasks/all?from=${from}`,
+        { headers: { Authorization: `Basic ${auth}` } }
+      );
+      if (!tasksRes.ok) throw new Error(`Onfleet API ${tasksRes.status}`);
+      const tasksData = await tasksRes.json();
+      const tasks = Array.isArray(tasksData) ? tasksData : (tasksData.tasks || []);
+      const task = tasks.find(t => t.notes && t.notes.toLowerCase().includes(ref.toLowerCase()));
+      if (!task) {
+        return res.status(404).json({ found: false, message: `Aucune tâche trouvée pour la référence "${ref}" dans les 30 derniers jours` });
+      }
+      phone = task.recipients?.[0]?.phone;
+      if (!phone) {
+        return res.status(200).json({ found: true, sms: false, message: 'Tâche trouvée mais aucun numéro de téléphone associé' });
+      }
     }
 
     // Cherche les SMS Twilio envoyés à ce numéro
@@ -227,13 +232,11 @@ app.get('/sms-status', async (req, res) => {
     const messages = messagesData.messages || [];
 
     if (messages.length === 0) {
-      return res.status(200).json({ found: true, phone, sms: false, message: 'Aucun SMS trouvé pour ce destinataire' });
+      return res.status(200).json({ phone, sms: false, message: 'Aucun SMS trouvé pour ce numéro' });
     }
 
     const latest = messages[0];
     return res.status(200).json({
-      found: true,
-      ref: task.notes,
       phone,
       sms: true,
       status: latest.status,
