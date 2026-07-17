@@ -312,7 +312,7 @@ app.post('/webhook/onfleet', async (req, res) => {
   // taskStarted (trigger 0) — email de tracking
   console.log(`[webhook] triggerId reçu:`, triggerId);
   if (triggerId === 0) {
-    const trackingUrl = task.trackingURL;
+    const trackingUrl = `https://www.dashboard-dromy.fr/track/${task.id}`;
     const etaMs = task.estimatedArrivalTime || task.estimatedCompletionTime;
     const etaMinutes = etaMs ? Math.round((etaMs - Date.now()) / 60000) : null;
     const subject = `Votre livraison Bene Bono du ${new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Europe/Paris' })} est en route`;
