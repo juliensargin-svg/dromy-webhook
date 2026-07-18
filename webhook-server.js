@@ -413,18 +413,17 @@ function buildQuitoqueEmailHtml({ deliveryDate, missionHour, missionHourMax }) {
 </html>`;
 }
 
-async function fetchTomorrowQuitoqueTasks() {
-  // Calcule minuit et 23h59 de demain en Europe/Paris
+async function fetchQuitoqueTasksForDay(offsetDays) {
   const now = new Date();
-  const tomorrow = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Paris' }));
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  tomorrow.setHours(0, 0, 0, 0);
-  const tomorrowEnd = new Date(tomorrow);
-  tomorrowEnd.setHours(23, 59, 59, 999);
+  const day = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Paris' }));
+  day.setDate(day.getDate() + offsetDays);
+  day.setHours(0, 0, 0, 0);
+  const dayEnd = new Date(day);
+  dayEnd.setHours(23, 59, 59, 999);
 
   const auth = Buffer.from(`${process.env.ONFLEET_API_KEY}:`).toString('base64');
   const res = await fetch(
-    `https://onfleet.com/api/v2/tasks/all?from=${tomorrow.getTime()}&to=${tomorrowEnd.getTime()}`,
+    `https://onfleet.com/api/v2/tasks/all?from=${day.getTime()}&to=${dayEnd.getTime()}`,
     { headers: { Authorization: `Basic ${auth}` } }
   );
   if (!res.ok) throw new Error(`Onfleet API ${res.status}: ${await res.text()}`);
@@ -432,6 +431,9 @@ async function fetchTomorrowQuitoqueTasks() {
   const tasks = Array.isArray(data) ? data : (data.tasks || []);
   return tasks.filter(t => t.notes && QUITOQUE_PATTERN.test(t.notes.trim()));
 }
+
+const fetchTomorrowQuitoqueTasks = () => fetchQuitoqueTasksForDay(1);
+const fetchTodayQuitoqueTasks = () => fetchQuitoqueTasksForDay(0);
 
 async function sendQuitoqueEmails() {
   console.log('[quitoque] Démarrage envoi emails veille...');
@@ -490,13 +492,65 @@ async function sendQuitoqueEmails() {
   console.log('[quitoque] Fin envoi emails veille');
 }
 
+async function sendQuitoqueSms() {
+  console.log('[quitoque] Démarrage envoi SMS jour J...');
+  const from = process.env.EMAIL_FROM || 'Dromy Livraisons <onboarding@resend.dev>';
+
+  let tasks;
+  try {
+    tasks = await fetchTodayQuitoqueTasks();
+    console.log(`[quitoque] ${tasks.length} tâche(s) Quitoque aujourd'hui`);
+  } catch (err) {
+    console.error('[quitoque] Erreur récupération tâches Onfleet (SMS):', err.message);
+    await resend.emails.send({
+      from, to: ['julien.sargin@gmail.com'], cc: ['oweis@dromy.fr'],
+      subject: '⚠️ Erreur cron Quitoque SMS — récupération tâches Onfleet',
+      html: `<p>Erreur lors de la récupération des tâches Quitoque pour aujourd'hui.</p><p><strong>Erreur :</strong> ${err.message}</p>`,
+    }).catch(e => console.error('[quitoque] Erreur alerte:', e.message));
+    return;
+  }
+
+  for (const task of tasks) {
+    const phone = task.recipients?.[0]?.phone;
+    const trackingUrl = task.trackingURL;
+    if (!phone) {
+      console.warn(`[quitoque] Pas de téléphone pour ${task.notes}`);
+      continue;
+    }
+    if (!trackingUrl) {
+      console.warn(`[quitoque] Pas de lien tracking pour ${task.notes}`);
+      continue;
+    }
+
+    const smsBody = `Votre box Quitoque sera livrée aujourd'hui. Suivi : ${trackingUrl}\nUn souci? dispatch@dromy.fr`;
+    try {
+      await sendSms(phone, smsBody);
+    } catch (err) {
+      console.error(`[quitoque] Erreur SMS pour ${task.notes}:`, err.message);
+      await resend.emails.send({
+        from, to: ['julien.sargin@gmail.com'], cc: ['oweis@dromy.fr'],
+        subject: `⚠️ Erreur SMS Quitoque — ${task.notes}`,
+        html: `<p>Erreur lors de l'envoi du SMS Quitoque.</p><p><strong>Référence :</strong> ${task.notes}</p><p><strong>Numéro :</strong> ${phone}</p><p><strong>Erreur :</strong> ${err.message}</p>`,
+      }).catch(e => console.error('[quitoque] Erreur alerte:', e.message));
+    }
+  }
+  console.log('[quitoque] Fin envoi SMS jour J');
+}
+
 app.get('/send-quitoque-emails', async (req, res) => {
   sendQuitoqueEmails().catch(e => console.error('[quitoque] Erreur:', e.message));
-  res.status(200).json({ triggered: true, message: 'Envoi Quitoque lancé, vérifiez les logs' });
+  res.status(200).json({ triggered: true, message: 'Envoi emails Quitoque lancé, vérifiez les logs' });
 });
 
-// Cron : tous les jours à 21h Europe/Paris
+app.get('/send-quitoque-sms', async (req, res) => {
+  sendQuitoqueSms().catch(e => console.error('[quitoque] Erreur SMS:', e.message));
+  res.status(200).json({ triggered: true, message: 'Envoi SMS Quitoque lancé, vérifiez les logs' });
+});
+
+// Cron emails : tous les jours à 21h Europe/Paris (veille de livraison)
 cron.schedule('0 21 * * *', sendQuitoqueEmails, { timezone: 'Europe/Paris' });
+// Cron SMS : tous les jours à 8h Europe/Paris (jour de livraison)
+cron.schedule('0 8 * * *', sendQuitoqueSms, { timezone: 'Europe/Paris' });
 console.log('[init] Cron Quitoque planifié à 21h Europe/Paris');
 
 const PORT = process.env.PORT || 8080;
