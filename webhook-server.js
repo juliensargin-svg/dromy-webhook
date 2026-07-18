@@ -559,6 +559,22 @@ app.get('/send-quitoque-sms', async (req, res) => {
   res.status(200).json({ triggered: true, message: 'Envoi SMS Quitoque lancé, vérifiez les logs' });
 });
 
+// Endpoint de test : envoie un SMS Quitoque à un numéro donné avec URL fictive
+// Ex: /test-quitoque-sms?phone=0612345678
+app.get('/test-quitoque-sms', async (req, res) => {
+  const { phone } = req.query;
+  if (!phone) return res.status(400).json({ error: 'Paramètre phone manquant. Ex: /test-quitoque-sms?phone=0612345678' });
+  const testUrl = 'https://www.dashboard-dromy.fr/track/TEST123456789abcde';
+  const shortUrl = await shortenUrl(testUrl);
+  const smsBody = `Votre box Quitoque sera livrée aujourd'hui. Suivi : ${shortUrl}\nUn souci? dispatch@dromy.fr`;
+  try {
+    await sendSms(phone.startsWith('+') ? phone : '+33' + phone.replace(/^\+?33|^0/, ''), smsBody);
+    res.status(200).json({ sent: true, to: phone, body: smsBody, shortUrl });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Cron emails : tous les jours à 21h Europe/Paris (veille de livraison)
 cron.schedule('0 21 * * *', sendQuitoqueEmails, { timezone: 'Europe/Paris' });
 // Cron SMS : tous les jours à 8h Europe/Paris (jour de livraison)
