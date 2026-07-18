@@ -9,6 +9,7 @@ require('dotenv').config({ override: false });
 const express = require('express');
 const { Resend } = require('resend');
 const twilio = require('twilio');
+const cron = require('node-cron');
 
 console.log('[init] RESEND_API_KEY présente:', !!process.env.RESEND_API_KEY);
 console.log('[init] TWILIO_ACCOUNT_SID présente:', !!process.env.TWILIO_ACCOUNT_SID);
@@ -34,6 +35,7 @@ app.use((req, res, next) => {
 app.use(express.json());
 
 const NOTES_PATTERN = /Bene\s+Bono\s+\d+/i;
+const QUITOQUE_PATTERN = /^03/;
 const ONFLEET_CDN = 'https://d15p8tr8p0vffz.cloudfront.net';
 
 
@@ -376,6 +378,126 @@ app.post('/webhook/onfleet', async (req, res) => {
 
   return res.status(200).json({ sent: true });
 });
+
+function buildQuitoqueEmailHtml({ deliveryDate, missionHour, missionHourMax }) {
+  return `
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    body { font-family: Arial, sans-serif; background: #f5f5f5; margin: 0; padding: 0; }
+    .container { max-width: 560px; margin: 40px auto; background: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+    .header { background: #4CAF50; padding: 28px 32px; text-align: center; }
+    .header img { max-width: 180px; height: auto; display: block; margin: 0 auto 12px; }
+    .header h1 { color: #ffffff; margin: 0; font-size: 20px; letter-spacing: 1px; font-weight: 600; }
+    .body { padding: 32px; color: #333; font-size: 15px; line-height: 1.6; }
+    .footer { background: #f9f9f9; padding: 16px 32px; text-align: center; font-size: 12px; color: #aaa; border-top: 1px solid #eee; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <img src="${LOGO_URL}" alt="Dromy" />
+      <h1>Livraison de votre box Quitoque</h1>
+    </div>
+    <div class="body">
+      <p>Cher client,</p>
+      <p>Dromy se chargera de la livraison de votre box Quitoque qui arrivera le <strong>${deliveryDate}</strong> entre <strong>${missionHour}</strong> et <strong>${missionHourMax}</strong>. Vous recevrez un SMS le jour J, dès la prise en charge de votre commande par un de nos livreurs.</p>
+      <p>Pour toute question ou imprévu, vous pouvez nous contacter : <a href="mailto:dispatch@dromy.fr">dispatch@dromy.fr</a>.</p>
+      <p>L'équipe Dromy</p>
+    </div>
+    <div class="footer">Dromy — Ce message est généré automatiquement</div>
+  </div>
+</body>
+</html>`;
+}
+
+async function fetchTomorrowQuitoqueTasks() {
+  // Calcule minuit et 23h59 de demain en Europe/Paris
+  const now = new Date();
+  const tomorrow = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Paris' }));
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  tomorrow.setHours(0, 0, 0, 0);
+  const tomorrowEnd = new Date(tomorrow);
+  tomorrowEnd.setHours(23, 59, 59, 999);
+
+  const auth = Buffer.from(`${process.env.ONFLEET_API_KEY}:`).toString('base64');
+  const res = await fetch(
+    `https://onfleet.com/api/v2/tasks/all?from=${tomorrow.getTime()}&to=${tomorrowEnd.getTime()}`,
+    { headers: { Authorization: `Basic ${auth}` } }
+  );
+  if (!res.ok) throw new Error(`Onfleet API ${res.status}: ${await res.text()}`);
+  const data = await res.json();
+  const tasks = Array.isArray(data) ? data : (data.tasks || []);
+  return tasks.filter(t => t.notes && QUITOQUE_PATTERN.test(t.notes.trim()));
+}
+
+async function sendQuitoqueEmails() {
+  console.log('[quitoque] Démarrage envoi emails veille...');
+  const from = process.env.EMAIL_FROM || 'Dromy Livraisons <onboarding@resend.dev>';
+
+  let tasks;
+  try {
+    tasks = await fetchTomorrowQuitoqueTasks();
+    console.log(`[quitoque] ${tasks.length} tâche(s) Quitoque pour demain`);
+  } catch (err) {
+    console.error('[quitoque] Erreur récupération tâches Onfleet:', err.message);
+    await resend.emails.send({
+      from, to: ['julien.sargin@gmail.com'], cc: ['oweis@dromy.fr'],
+      subject: '⚠️ Erreur cron Quitoque — récupération tâches Onfleet',
+      html: `<p>Erreur lors de la récupération des tâches Quitoque pour demain.</p><p><strong>Erreur :</strong> ${err.message}</p>`,
+    }).catch(e => console.error('[quitoque] Erreur alerte:', e.message));
+    return;
+  }
+
+  for (const task of tasks) {
+    const recipientEmail = task.recipients?.[0]?.notes?.trim();
+    if (!recipientEmail) {
+      console.warn(`[quitoque] Pas d'email pour la tâche ${task.id} (${task.notes})`);
+      continue;
+    }
+
+    const deliveryDate = new Date(task.completeAfter || task.completeBefore).toLocaleDateString('fr-FR', {
+      timeZone: 'Europe/Paris', weekday: 'long', day: '2-digit', month: 'long', year: 'numeric',
+    });
+    const missionHour = task.completeAfter
+      ? new Date(task.completeAfter).toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' })
+      : '?';
+    const missionHourMax = task.completeBefore
+      ? new Date(task.completeBefore).toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' })
+      : '?';
+
+    try {
+      const { data: sent, error } = await resend.emails.send({
+        from,
+        to: [recipientEmail],
+        cc: ['dispatch@dromy.fr'],
+        subject: 'Livraison de votre box Quitoque',
+        html: buildQuitoqueEmailHtml({ deliveryDate, missionHour, missionHourMax }),
+      });
+      if (error) throw new Error(JSON.stringify(error));
+      console.log(`[quitoque] Email envoyé à ${recipientEmail} pour ${task.notes} — id: ${sent.id}`);
+    } catch (err) {
+      console.error(`[quitoque] Erreur envoi email pour ${task.notes}:`, err.message);
+      await resend.emails.send({
+        from, to: ['julien.sargin@gmail.com'], cc: ['oweis@dromy.fr'],
+        subject: `⚠️ Erreur email Quitoque — ${task.notes}`,
+        html: `<p>Erreur lors de l'envoi de l'email Quitoque veille.</p><p><strong>Référence :</strong> ${task.notes}</p><p><strong>Destinataire :</strong> ${recipientEmail}</p><p><strong>Erreur :</strong> ${err.message}</p>`,
+      }).catch(e => console.error('[quitoque] Erreur alerte:', e.message));
+    }
+  }
+  console.log('[quitoque] Fin envoi emails veille');
+}
+
+app.get('/send-quitoque-emails', async (req, res) => {
+  sendQuitoqueEmails().catch(e => console.error('[quitoque] Erreur:', e.message));
+  res.status(200).json({ triggered: true, message: 'Envoi Quitoque lancé, vérifiez les logs' });
+});
+
+// Cron : tous les jours à 21h Europe/Paris
+cron.schedule('0 21 * * *', sendQuitoqueEmails, { timezone: 'Europe/Paris' });
+console.log('[init] Cron Quitoque planifié à 21h Europe/Paris');
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, '0.0.0.0', () => {
