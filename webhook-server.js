@@ -458,7 +458,8 @@ const fetchTomorrowQuitoqueTasks = () => fetchQuitoqueTasksForDay(1);
 const fetchTodayQuitoqueTasks = () => fetchQuitoqueTasksForDay(0);
 
 async function sendQuitoqueEmails(offsetDays = 1) {
-  console.log('[quitoque] Démarrage envoi emails veille...');
+  if (!Number.isInteger(offsetDays)) offsetDays = 1;
+  console.log(`[quitoque] Démarrage envoi emails veille (offset=${offsetDays})...`);
   const from = process.env.EMAIL_FROM || 'Dromy Livraisons <onboarding@resend.dev>';
 
   let tasks;
@@ -582,9 +583,11 @@ app.get('/send-quitoque-sms', async (req, res) => {
 });
 
 // Cron emails : tous les jours à 21h Europe/Paris (veille de livraison)
-cron.schedule('0 21 * * *', sendQuitoqueEmails, { timezone: 'Europe/Paris' });
+// node-cron passe la date d'exécution en argument : ne jamais lui donner
+// sendQuitoqueEmails directement (elle la prendrait pour offsetDays)
+cron.schedule('0 21 * * *', () => sendQuitoqueEmails(1), { timezone: 'Europe/Paris' });
 // Cron SMS : tous les jours à 8h Europe/Paris (jour de livraison)
-cron.schedule('0 8 * * *', sendQuitoqueSms, { timezone: 'Europe/Paris' });
+cron.schedule('0 8 * * *', () => sendQuitoqueSms(), { timezone: 'Europe/Paris' });
 console.log('[init] Cron Quitoque planifié à 21h Europe/Paris');
 
 const PORT = process.env.PORT || 8080;
