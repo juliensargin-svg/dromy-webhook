@@ -413,25 +413,40 @@ function buildQuitoqueEmailHtml({ deliveryDate, missionHour, missionHourMax }) {
 </html>`;
 }
 
+// Minuit (heure de Paris) du jour donné, en timestamp UTC
+function parisMidnightUtc(y, m, d) {
+  const utcMidnight = Date.UTC(y, m - 1, d);
+  // À minuit UTC, Paris affiche 1h (hiver) ou 2h (été) : on recule d'autant
+  const parisHour = parseInt(new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Paris', hour: '2-digit', hourCycle: 'h23',
+  }).format(utcMidnight), 10);
+  return utcMidnight - parisHour * 3600 * 1000;
+}
+
 async function fetchQuitoqueTasksForDay(offsetDays) {
   const parisDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Paris' }).format(new Date());
   const [y, m, d] = parisDate.split('-').map(Number);
-  // Bornes UTC du jour cible (on filtre completeAfter nous-mêmes)
-  const targetFrom = Date.UTC(y, m - 1, d + offsetDays, 0, 0, 0, 0);
-  const targetTo   = Date.UTC(y, m - 1, d + offsetDays + 1, 0, 0, 0, 0) - 1;
+  const targetFrom = parisMidnightUtc(y, m, d + offsetDays);
+  const targetTo = parisMidnightUtc(y, m, d + offsetDays + 1) - 1;
 
-  // Fetch les tâches créées dans les 14 derniers jours (couvre les créations anticipées)
+  // L'API Onfleet pagine par 64 : on parcourt toutes les pages via lastId.
+  // states=0,1,2 (à venir/assignées/en cours) exclut les tâches déjà complétées.
   const fetchFrom = Date.now() - 14 * 24 * 60 * 60 * 1000;
   const auth = Buffer.from(`${process.env.ONFLEET_API_KEY}:`).toString('base64');
-  const res = await fetch(
-    `https://onfleet.com/api/v2/tasks/all?from=${fetchFrom}`,
-    { headers: { Authorization: `Basic ${auth}` } }
-  );
-  if (!res.ok) throw new Error(`Onfleet API ${res.status}: ${await res.text()}`);
-  const data = await res.json();
-  const tasks = Array.isArray(data) ? data : (data.tasks || []);
-  console.log(`[quitoque] ${tasks.length} tâche(s) totales récupérées, filtrage pour offset=${offsetDays}`);
-  return tasks.filter(t => {
+  const allTasks = [];
+  let lastId = null;
+  for (let page = 0; page < 200; page++) {
+    const url = `https://onfleet.com/api/v2/tasks/all?from=${fetchFrom}&states=0,1,2${lastId ? `&lastId=${encodeURIComponent(lastId)}` : ''}`;
+    const res = await fetch(url, { headers: { Authorization: `Basic ${auth}` } });
+    if (!res.ok) throw new Error(`Onfleet API ${res.status}: ${await res.text()}`);
+    const data = await res.json();
+    const tasks = Array.isArray(data) ? data : (data.tasks || []);
+    allTasks.push(...tasks);
+    lastId = !Array.isArray(data) && data.lastId ? data.lastId : null;
+    if (!lastId) break;
+  }
+  console.log(`[quitoque] ${allTasks.length} tâche(s) totales récupérées, filtrage pour offset=${offsetDays}`);
+  return allTasks.filter(t => {
     if (!t.notes || !QUITOQUE_PATTERN.test(t.notes.trim())) return false;
     const taskTime = t.completeAfter || t.completeBefore;
     if (!taskTime) return false;
