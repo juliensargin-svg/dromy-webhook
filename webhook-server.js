@@ -414,21 +414,29 @@ function buildQuitoqueEmailHtml({ deliveryDate, missionHour, missionHourMax }) {
 }
 
 async function fetchQuitoqueTasksForDay(offsetDays) {
-  // en-CA donne toujours YYYY-MM-DD, sans ambiguïté
   const parisDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Paris' }).format(new Date());
   const [y, m, d] = parisDate.split('-').map(Number);
-  const from = Date.UTC(y, m - 1, d + offsetDays, 0, 0, 0, 0);
-  const to   = Date.UTC(y, m - 1, d + offsetDays, 23, 59, 59, 999);
+  // Bornes UTC du jour cible (on filtre completeAfter nous-mêmes)
+  const targetFrom = Date.UTC(y, m - 1, d + offsetDays, 0, 0, 0, 0);
+  const targetTo   = Date.UTC(y, m - 1, d + offsetDays + 1, 0, 0, 0, 0) - 1;
 
+  // Fetch les tâches créées dans les 14 derniers jours (couvre les créations anticipées)
+  const fetchFrom = Date.now() - 14 * 24 * 60 * 60 * 1000;
   const auth = Buffer.from(`${process.env.ONFLEET_API_KEY}:`).toString('base64');
   const res = await fetch(
-    `https://onfleet.com/api/v2/tasks/all?from=${from}&to=${to}`,
+    `https://onfleet.com/api/v2/tasks/all?from=${fetchFrom}`,
     { headers: { Authorization: `Basic ${auth}` } }
   );
   if (!res.ok) throw new Error(`Onfleet API ${res.status}: ${await res.text()}`);
   const data = await res.json();
   const tasks = Array.isArray(data) ? data : (data.tasks || []);
-  return tasks.filter(t => t.notes && QUITOQUE_PATTERN.test(t.notes.trim()));
+  console.log(`[quitoque] ${tasks.length} tâche(s) totales récupérées, filtrage pour offset=${offsetDays}`);
+  return tasks.filter(t => {
+    if (!t.notes || !QUITOQUE_PATTERN.test(t.notes.trim())) return false;
+    const taskTime = t.completeAfter || t.completeBefore;
+    if (!taskTime) return false;
+    return taskTime >= targetFrom && taskTime <= targetTo;
+  });
 }
 
 const fetchTomorrowQuitoqueTasks = () => fetchQuitoqueTasksForDay(1);
