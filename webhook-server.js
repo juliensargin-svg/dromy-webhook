@@ -434,13 +434,13 @@ async function fetchQuitoqueTasksForDay(offsetDays) {
 const fetchTomorrowQuitoqueTasks = () => fetchQuitoqueTasksForDay(1);
 const fetchTodayQuitoqueTasks = () => fetchQuitoqueTasksForDay(0);
 
-async function sendQuitoqueEmails() {
+async function sendQuitoqueEmails(offsetDays = 1) {
   console.log('[quitoque] Démarrage envoi emails veille...');
   const from = process.env.EMAIL_FROM || 'Dromy Livraisons <onboarding@resend.dev>';
 
   let tasks;
   try {
-    tasks = await fetchTomorrowQuitoqueTasks();
+    tasks = await fetchQuitoqueTasksForDay(offsetDays);
     console.log(`[quitoque] ${tasks.length} tâche(s) Quitoque pour demain`);
   } catch (err) {
     console.error('[quitoque] Erreur récupération tâches Onfleet:', err.message);
@@ -549,8 +549,9 @@ async function sendQuitoqueSms() {
 }
 
 app.get('/send-quitoque-emails', async (req, res) => {
-  sendQuitoqueEmails().catch(e => console.error('[quitoque] Erreur:', e.message));
-  res.status(200).json({ triggered: true, message: 'Envoi emails Quitoque lancé, vérifiez les logs' });
+  const offset = req.query.offset !== undefined ? parseInt(req.query.offset, 10) : 1;
+  sendQuitoqueEmails(offset).catch(e => console.error('[quitoque] Erreur:', e.message));
+  res.status(200).json({ triggered: true, offset, message: 'Envoi emails Quitoque lancé, vérifiez les logs' });
 });
 
 app.get('/send-quitoque-sms', async (req, res) => {
