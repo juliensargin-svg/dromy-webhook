@@ -567,16 +567,6 @@ async function sendQuitoqueSms() {
   console.log('[quitoque] Fin envoi SMS jour J');
 }
 
-app.get('/debug-quitoque', async (req, res) => {
-  const fetchFrom = Date.now() - 14 * 24 * 60 * 60 * 1000;
-  const auth = Buffer.from(`${process.env.ONFLEET_API_KEY}:`).toString('base64');
-  const r = await fetch(`https://onfleet.com/api/v2/tasks/all?from=${fetchFrom}`, { headers: { Authorization: `Basic ${auth}` } });
-  const data = await r.json();
-  const tasks = Array.isArray(data) ? data : (data.tasks || []);
-  const quitoque = tasks.filter(t => t.notes && QUITOQUE_PATTERN.test(t.notes.trim()));
-  res.json(quitoque.map(t => ({ id: t.id, notes: t.notes, completeAfter: t.completeAfter, completeBefore: t.completeBefore })));
-});
-
 app.get('/send-quitoque-emails', async (req, res) => {
   const offset = req.query.offset !== undefined ? parseInt(req.query.offset, 10) : 1;
   sendQuitoqueEmails(offset).catch(e => console.error('[quitoque] Erreur:', e.message));
@@ -586,22 +576,6 @@ app.get('/send-quitoque-emails', async (req, res) => {
 app.get('/send-quitoque-sms', async (req, res) => {
   sendQuitoqueSms().catch(e => console.error('[quitoque] Erreur SMS:', e.message));
   res.status(200).json({ triggered: true, message: 'Envoi SMS Quitoque lancé, vérifiez les logs' });
-});
-
-// Endpoint de test : envoie un SMS Quitoque à un numéro donné avec URL fictive
-// Ex: /test-quitoque-sms?phone=0612345678
-app.get('/test-quitoque-sms', async (req, res) => {
-  const { phone } = req.query;
-  if (!phone) return res.status(400).json({ error: 'Paramètre phone manquant. Ex: /test-quitoque-sms?phone=0612345678' });
-  const testUrl = 'https://www.dashboard-dromy.fr/track/TEST123456789abcde';
-  const shortUrl = await shortenUrl(testUrl);
-  const smsBody = `Votre box Quitoque sera livrée aujourd'hui. Suivi : ${shortUrl}\nUn souci? dispatch@dromy.fr`;
-  try {
-    await sendSms(phone.startsWith('+') ? phone : '+33' + phone.replace(/^\+?33|^0/, ''), smsBody);
-    res.status(200).json({ sent: true, to: phone, body: smsBody, shortUrl });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
 });
 
 // Cron emails : tous les jours à 21h Europe/Paris (veille de livraison)
