@@ -545,13 +545,9 @@ async function sendQuitoqueSms() {
 
   for (const task of tasks) {
     const phone = task.recipients?.[0]?.phone;
-    const trackingUrl = task.trackingURL;
+    const trackingUrl = `https://www.dashboard-dromy.fr/track/${task.id}`;
     if (!phone) {
       console.warn(`[quitoque] Pas de téléphone pour ${task.notes}`);
-      continue;
-    }
-    if (!trackingUrl) {
-      console.warn(`[quitoque] Pas de lien tracking pour ${task.notes}`);
       continue;
     }
 
