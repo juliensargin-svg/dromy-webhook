@@ -414,16 +414,15 @@ function buildQuitoqueEmailHtml({ deliveryDate, missionHour, missionHourMax }) {
 }
 
 async function fetchQuitoqueTasksForDay(offsetDays) {
-  const now = new Date();
-  const day = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Paris' }));
-  day.setDate(day.getDate() + offsetDays);
-  day.setHours(0, 0, 0, 0);
-  const dayEnd = new Date(day);
-  dayEnd.setHours(23, 59, 59, 999);
+  // en-CA donne toujours YYYY-MM-DD, sans ambiguïté
+  const parisDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Paris' }).format(new Date());
+  const [y, m, d] = parisDate.split('-').map(Number);
+  const from = Date.UTC(y, m - 1, d + offsetDays, 0, 0, 0, 0);
+  const to   = Date.UTC(y, m - 1, d + offsetDays, 23, 59, 59, 999);
 
   const auth = Buffer.from(`${process.env.ONFLEET_API_KEY}:`).toString('base64');
   const res = await fetch(
-    `https://onfleet.com/api/v2/tasks/all?from=${day.getTime()}&to=${dayEnd.getTime()}`,
+    `https://onfleet.com/api/v2/tasks/all?from=${from}&to=${to}`,
     { headers: { Authorization: `Basic ${auth}` } }
   );
   if (!res.ok) throw new Error(`Onfleet API ${res.status}: ${await res.text()}`);
