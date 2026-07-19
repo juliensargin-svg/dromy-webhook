@@ -514,6 +514,20 @@ async function sendQuitoqueEmails(offsetDays = 1) {
   console.log('[quitoque] Fin envoi emails veille');
 }
 
+// Les opérateurs français bloquent les SMS contenant dashboard-dromy.fr (erreur
+// Twilio 30007 Carrier violation, vérifié 3x) ; via TinyURL ils passent, et la
+// redirection est un 301 direct sans interstitiel.
+async function shortenUrl(url) {
+  try {
+    const res = await fetch(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(url)}`);
+    if (!res.ok) throw new Error(`TinyURL ${res.status}`);
+    return (await res.text()).trim();
+  } catch (err) {
+    console.warn('[shortenUrl] Erreur:', err.message, '— URL originale utilisée');
+    return url;
+  }
+}
+
 async function sendQuitoqueSms() {
   console.log('[quitoque] Démarrage envoi SMS jour J...');
   const from = process.env.EMAIL_FROM || 'Dromy Livraisons <onboarding@resend.dev>';
@@ -540,8 +554,8 @@ async function sendQuitoqueSms() {
       continue;
     }
 
-    // URL Dromy complète : max 143 septets GSM-7 (IDs Onfleet = 24 chars fixes), tient en 1 SMS
-    const smsBody = `Votre box Quitoque sera livrée aujourd'hui. Suivi : ${trackingUrl}\nUn souci? dispatch@dromy.fr`;
+    const shortUrl = await shortenUrl(trackingUrl);
+    const smsBody = `Votre box Quitoque sera livrée aujourd'hui. Suivi : ${shortUrl}\nUn souci? dispatch@dromy.fr`;
     try {
       await sendSms(phone, smsBody);
     } catch (err) {
