@@ -515,20 +515,6 @@ async function sendQuitoqueEmails(offsetDays = 1) {
   console.log('[quitoque] Fin envoi emails veille');
 }
 
-// Les opérateurs français bloquent les SMS contenant dashboard-dromy.fr (erreur
-// Twilio 30007 Carrier violation, vérifié 3x) ; via TinyURL ils passent, et la
-// redirection est un 301 direct sans interstitiel.
-async function shortenUrl(url) {
-  try {
-    const res = await fetch(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(url)}`);
-    if (!res.ok) throw new Error(`TinyURL ${res.status}`);
-    return (await res.text()).trim();
-  } catch (err) {
-    console.warn('[shortenUrl] Erreur:', err.message, '— URL originale utilisée');
-    return url;
-  }
-}
-
 async function sendQuitoqueSms() {
   console.log('[quitoque] Démarrage envoi SMS jour J...');
   const from = process.env.EMAIL_FROM || 'Dromy Livraisons <onboarding@resend.dev>';
@@ -549,14 +535,16 @@ async function sendQuitoqueSms() {
 
   for (const task of tasks) {
     const phone = task.recipients?.[0]?.phone;
-    const trackingUrl = `https://www.dashboard-dromy.fr/track/${task.id}`;
+    // Les opérateurs français bloquent les SMS contenant dashboard-dromy.fr
+    // (Twilio 30007) mais font confiance à vercel.app : dromy.vercel.app/t/:id
+    // redirige (307) vers www.dashboard-dromy.fr/track/:id (projet dromy-redirect)
+    const trackingUrl = `https://dromy.vercel.app/t/${task.id}`;
     if (!phone) {
       console.warn(`[quitoque] Pas de téléphone pour ${task.notes}`);
       continue;
     }
 
-    const shortUrl = await shortenUrl(trackingUrl);
-    const smsBody = `Votre box Quitoque sera livrée aujourd'hui. Suivi : ${shortUrl}\nUn souci? dispatch@dromy.fr`;
+    const smsBody = `Votre box Quitoque sera livrée aujourd'hui. Suivi : ${trackingUrl}\nUn souci? dispatch@dromy.fr`;
     try {
       await sendSms(phone, smsBody);
     } catch (err) {
