@@ -556,6 +556,16 @@ async function sendQuitoqueSms() {
   console.log('[quitoque] Fin envoi SMS jour J');
 }
 
+app.get('/debug-quitoque', async (req, res) => {
+  const fetchFrom = Date.now() - 14 * 24 * 60 * 60 * 1000;
+  const auth = Buffer.from(`${process.env.ONFLEET_API_KEY}:`).toString('base64');
+  const r = await fetch(`https://onfleet.com/api/v2/tasks/all?from=${fetchFrom}`, { headers: { Authorization: `Basic ${auth}` } });
+  const data = await r.json();
+  const tasks = Array.isArray(data) ? data : (data.tasks || []);
+  const quitoque = tasks.filter(t => t.notes && QUITOQUE_PATTERN.test(t.notes.trim()));
+  res.json(quitoque.map(t => ({ id: t.id, notes: t.notes, completeAfter: t.completeAfter, completeBefore: t.completeBefore })));
+});
+
 app.get('/send-quitoque-emails', async (req, res) => {
   const offset = req.query.offset !== undefined ? parseInt(req.query.offset, 10) : 1;
   sendQuitoqueEmails(offset).catch(e => console.error('[quitoque] Erreur:', e.message));
