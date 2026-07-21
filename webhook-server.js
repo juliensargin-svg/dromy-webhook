@@ -515,14 +515,35 @@ async function sendQuitoqueEmails(offsetDays = 1) {
   console.log('[quitoque] Fin envoi emails veille');
 }
 
+const QUITOQUE_SMS_LEAD_MS = 60 * 60 * 1000; // SMS envoyé 1h avant le début du créneau
+
+// Numéros ayant déjà reçu un SMS Quitoque aujourd'hui (dédup via Twilio,
+// résiste aux redémarrages Railway qui videraient un cache mémoire)
+async function fetchTodayQuitoqueSmsNumbers() {
+  if (!twilioClient) return new Set();
+  const parisDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Paris' }).format(new Date());
+  const [y, m, d] = parisDate.split('-').map(Number);
+  const startUtc = new Date(parisMidnightUtc(y, m, d));
+  const msgs = await twilioClient.messages.list({
+    from: process.env.TWILIO_FROM,
+    dateSentAfter: startUtc,
+    limit: 1000,
+  });
+  const set = new Set();
+  for (const msg of msgs) {
+    if ((msg.body || '').includes('box Quitoque')) set.add(msg.to);
+  }
+  return set;
+}
+
+// Exécuté toutes les 15 min : envoie le SMS des tâches dont le créneau commence
+// dans moins d'1h (et pas encore commencé). Un SMS par tâche, une fois pour toutes.
 async function sendQuitoqueSms() {
-  console.log('[quitoque] Démarrage envoi SMS jour J...');
   const from = process.env.EMAIL_FROM || 'Dromy Livraisons <onboarding@resend.dev>';
 
   let tasks;
   try {
     tasks = await fetchTodayQuitoqueTasks();
-    console.log(`[quitoque] ${tasks.length} tâche(s) Quitoque aujourd'hui`);
   } catch (err) {
     console.error('[quitoque] Erreur récupération tâches Onfleet (SMS):', err.message);
     await resend.emails.send({
@@ -533,20 +554,34 @@ async function sendQuitoqueSms() {
     return;
   }
 
-  for (const task of tasks) {
-    const phone = task.recipients?.[0]?.phone;
-    // Les opérateurs français bloquent les SMS contenant dashboard-dromy.fr
-    // (Twilio 30007) mais font confiance à vercel.app : dromy.vercel.app/t/:id
-    // redirige (307) vers www.dashboard-dromy.fr/track/:id (projet dromy-redirect)
-    const trackingUrl = `https://dromy.vercel.app/t/${task.id}`;
-    if (!phone) {
-      console.warn(`[quitoque] Pas de téléphone pour ${task.notes}`);
-      continue;
-    }
+  const now = Date.now();
+  // Dû : on est dans l'heure qui précède le créneau (créneau pas encore commencé)
+  const due = tasks.filter(t => {
+    if (!t.completeAfter || !t.recipients?.[0]?.phone) return false;
+    const target = t.completeAfter - QUITOQUE_SMS_LEAD_MS;
+    return target <= now && now < t.completeAfter;
+  });
+  if (due.length === 0) return;
 
+  let alreadySent;
+  try {
+    alreadySent = await fetchTodayQuitoqueSmsNumbers();
+  } catch (err) {
+    console.error('[quitoque] Erreur dédup Twilio, envoi prudent annulé:', err.message);
+    return; // sans dédup fiable, on ne prend pas le risque de doublons
+  }
+
+  console.log(`[quitoque] ${due.length} SMS dû(s), ${alreadySent.size} déjà envoyé(s) aujourd'hui`);
+  for (const task of due) {
+    const phone = task.recipients[0].phone;
+    if (alreadySent.has(phone)) continue;
+    const trackingUrl = `https://dromy.vercel.app/t/${task.id}`;
     const smsBody = `Votre box Quitoque sera livrée aujourd'hui. Suivi : ${trackingUrl}\nUn souci? dispatch@dromy.fr`;
     try {
       await sendSms(phone, smsBody);
+      alreadySent.add(phone);
+      const creneau = new Date(task.completeAfter).toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' });
+      console.log(`[quitoque] SMS envoyé pour ${task.notes} (créneau ${creneau})`);
     } catch (err) {
       console.error(`[quitoque] Erreur SMS pour ${task.notes}:`, err.message);
       await resend.emails.send({
@@ -556,7 +591,6 @@ async function sendQuitoqueSms() {
       }).catch(e => console.error('[quitoque] Erreur alerte:', e.message));
     }
   }
-  console.log('[quitoque] Fin envoi SMS jour J');
 }
 
 app.get('/send-quitoque-emails', async (req, res) => {
@@ -574,9 +608,9 @@ app.get('/send-quitoque-sms', async (req, res) => {
 // node-cron passe la date d'exécution en argument : ne jamais lui donner
 // sendQuitoqueEmails directement (elle la prendrait pour offsetDays)
 cron.schedule('0 21 * * *', () => sendQuitoqueEmails(1), { timezone: 'Europe/Paris' });
-// Cron SMS : tous les jours à 8h Europe/Paris (jour de livraison)
-cron.schedule('0 8 * * *', () => sendQuitoqueSms(), { timezone: 'Europe/Paris' });
-console.log('[init] Cron Quitoque planifié à 21h Europe/Paris');
+// Cron SMS : toutes les 15 min — chaque SMS part 1h avant le début de son créneau
+cron.schedule('*/15 * * * *', () => sendQuitoqueSms(), { timezone: 'Europe/Paris' });
+console.log('[init] Cron Quitoque : emails 21h, SMS toutes les 15 min (1h avant créneau)');
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, '0.0.0.0', () => {
