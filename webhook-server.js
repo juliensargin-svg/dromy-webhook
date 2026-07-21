@@ -404,7 +404,7 @@ function buildQuitoqueEmailHtml({ deliveryDate, missionHour, missionHourMax }) {
     <div class="body">
       <p>Cher client,</p>
       <p>Dromy se chargera de la livraison de votre box Quitoque qui arrivera le <strong>${deliveryDate}</strong> entre <strong>${missionHour}</strong> et <strong>${missionHourMax}</strong>. Vous recevrez un SMS le jour J, dès la prise en charge de votre commande par un de nos livreurs.</p>
-      <p>Pour toute question ou imprévu, vous pouvez nous contacter : <a href="mailto:dispatch@dromy.fr">dispatch@dromy.fr</a>.</p>
+      <p>Pour toute modification concernant cette livraison, vous pouvez nous contacter à l'adresse mail suivante : <a href="mailto:dispatch@dromy.fr">dispatch@dromy.fr</a></p>
       <p>L'équipe Dromy</p>
     </div>
     <div class="footer">Dromy — Ce message est généré automatiquement</div>
