@@ -423,6 +423,21 @@ function parisMidnightUtc(y, m, d) {
   return utcMidnight - parisHour * 3600 * 1000;
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// GET Onfleet avec throttle implicite + retry sur 429 (limite par seconde).
+// Onfleet impose une limite de requêtes/seconde : on réessaie avec backoff
+// au lieu d'échouer, et l'appelant espace les pages (voir fetchQuitoqueTasksForDay).
+async function onfleetGet(url, auth, attempt = 0) {
+  const res = await fetch(url, { headers: { Authorization: `Basic ${auth}` } });
+  if (res.status === 429 && attempt < 5) {
+    await sleep(1000 * Math.pow(2, attempt)); // 1s, 2s, 4s, 8s, 16s
+    return onfleetGet(url, auth, attempt + 1);
+  }
+  if (!res.ok) throw new Error(`Onfleet API ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
 async function fetchQuitoqueTasksForDay(offsetDays) {
   const parisDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Paris' }).format(new Date());
   const [y, m, d] = parisDate.split('-').map(Number);
@@ -431,19 +446,19 @@ async function fetchQuitoqueTasksForDay(offsetDays) {
 
   // L'API Onfleet pagine par 64 : on parcourt toutes les pages via lastId.
   // states=0,1,2 (à venir/assignées/en cours) exclut les tâches déjà complétées.
+  // Fenêtre 14 j obligatoire : certaines tâches Quitoque sont créées >4 j à l'avance.
   const fetchFrom = Date.now() - 14 * 24 * 60 * 60 * 1000;
   const auth = Buffer.from(`${process.env.ONFLEET_API_KEY}:`).toString('base64');
   const allTasks = [];
   let lastId = null;
   for (let page = 0; page < 200; page++) {
     const url = `https://onfleet.com/api/v2/tasks/all?from=${fetchFrom}&states=0,1,2${lastId ? `&lastId=${encodeURIComponent(lastId)}` : ''}`;
-    const res = await fetch(url, { headers: { Authorization: `Basic ${auth}` } });
-    if (!res.ok) throw new Error(`Onfleet API ${res.status}: ${await res.text()}`);
-    const data = await res.json();
+    const data = await onfleetGet(url, auth);
     const tasks = Array.isArray(data) ? data : (data.tasks || []);
     allTasks.push(...tasks);
     lastId = !Array.isArray(data) && data.lastId ? data.lastId : null;
     if (!lastId) break;
+    await sleep(200); // reste sous la limite par seconde d'Onfleet
   }
   console.log(`[quitoque] ${allTasks.length} tâche(s) totales récupérées, filtrage pour offset=${offsetDays}`);
   return allTasks.filter(t => {
