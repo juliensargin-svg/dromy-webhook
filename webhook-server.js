@@ -40,13 +40,7 @@ const ONFLEET_CDN = 'https://d15p8tr8p0vffz.cloudfront.net';
 
 
 async function fetchOnfleetTask(taskId) {
-  const auth = Buffer.from(`${process.env.ONFLEET_API_KEY}:`).toString('base64');
-  const res = await fetch(
-    `https://onfleet.com/api/v2/tasks/${encodeURIComponent(taskId)}`,
-    { headers: { Authorization: `Basic ${auth}` } }
-  );
-  if (!res.ok) throw new Error(`Onfleet API ${res.status}: ${await res.text()}`);
-  return res.json();
+  return onfleetGet(`https://onfleet.com/api/v2/tasks/${encodeURIComponent(taskId)}`);
 }
 
 function formatDate(timestamp) {
@@ -425,65 +419,117 @@ function parisMidnightUtc(y, m, d) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// GET Onfleet avec throttle implicite + retry sur 429 (limite par seconde).
-// Onfleet impose une limite de requêtes/seconde : on réessaie avec backoff
-// au lieu d'échouer, et l'appelant espace les pages (voir fetchQuitoqueTasksForDay).
-async function onfleetGet(url, auth, attempt = 0) {
+// Tous les appels Onfleet passent par ici : ils sont sérialisés et espacés
+// d'au moins ONFLEET_MIN_INTERVAL_MS, puis réessayés avec backoff sur 429.
+// Onfleet limite le nombre de requêtes par seconde ; sans file d'attente, le
+// cron Quitoque et un webhook simultané peuvent dépasser la limite.
+const ONFLEET_MIN_INTERVAL_MS = Number(process.env.ONFLEET_MIN_INTERVAL_MS || 300);
+let onfleetQueue = Promise.resolve();
+let onfleetLastAt = 0;
+
+async function onfleetRequest(url, auth, attempt = 0) {
+  const wait = ONFLEET_MIN_INTERVAL_MS - (Date.now() - onfleetLastAt);
+  if (wait > 0) await sleep(wait);
+  onfleetLastAt = Date.now();
   const res = await fetch(url, { headers: { Authorization: `Basic ${auth}` } });
   if (res.status === 429 && attempt < 5) {
     await sleep(1000 * Math.pow(2, attempt)); // 1s, 2s, 4s, 8s, 16s
-    return onfleetGet(url, auth, attempt + 1);
+    return onfleetRequest(url, auth, attempt + 1);
   }
   if (!res.ok) throw new Error(`Onfleet API ${res.status}: ${await res.text()}`);
   return res.json();
 }
 
-async function fetchQuitoqueTasksForDay(offsetDays) {
+function onfleetGet(url, auth = Buffer.from(`${process.env.ONFLEET_API_KEY}:`).toString('base64')) {
+  const run = () => onfleetRequest(url, auth);
+  const p = onfleetQueue.then(run, run);
+  onfleetQueue = p.catch(() => {});
+  return p;
+}
+
+// Anti-spam d'alertes : une même alerte n'est envoyée qu'une fois par heure
+// (sinon un rate limit Onfleet qui dure génère un mail tous les 15 min).
+const ALERT_MIN_INTERVAL_MS = Number(process.env.ALERT_MIN_INTERVAL_MS || 60 * 60 * 1000);
+const lastAlertAt = new Map();
+function shouldAlert(key) {
+  const prev = lastAlertAt.get(key) || 0;
+  if (Date.now() - prev < ALERT_MIN_INTERVAL_MS) return false;
+  lastAlertAt.set(key, Date.now());
+  return true;
+}
+
+// Cache mémoire des tâches d'un jour. Le cron SMS tourne toutes les 15 min :
+// sans cache on re-paginait toute la journée Onfleet 96×/jour (~10 000 requêtes
+// → HTTP 429). Les tâches d'un jour sont créées la veille, un cache court suffit.
+const QUITOQUE_CACHE_TTL_MS = Number(process.env.QUITOQUE_CACHE_TTL_MS || 30 * 60 * 1000);
+const quitoqueDayCache = new Map(); // clé "YYYY-MM-DD" -> { at, tasks }
+
+async function fetchQuitoqueTasksForDay(offsetDays, { force = false } = {}) {
   const parisDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Paris' }).format(new Date());
   const [y, m, d] = parisDate.split('-').map(Number);
   const targetFrom = parisMidnightUtc(y, m, d + offsetDays);
   const targetTo = parisMidnightUtc(y, m, d + offsetDays + 1) - 1;
 
+  const cacheKey = `${targetFrom}`;
+  if (!force) {
+    const hit = quitoqueDayCache.get(cacheKey);
+    if (hit && Date.now() - hit.at < QUITOQUE_CACHE_TTL_MS) {
+      console.log(`[quitoque] cache hit (offset=${offsetDays}, ${hit.tasks.length} tâche(s), ${Math.round((Date.now() - hit.at) / 1000)}s)`);
+      return hit.tasks;
+    }
+  }
+
   // L'API Onfleet pagine par 64 : on parcourt toutes les pages via lastId.
   // states=0,1,2 (à venir/assignées/en cours) exclut les tâches déjà complétées.
-  // Fenêtre 14 j obligatoire : certaines tâches Quitoque sont créées >4 j à l'avance.
-  const fetchFrom = Date.now() - 14 * 24 * 60 * 60 * 1000;
+  // Mesuré le 14/09/2026 sur les vraies données : `to` n'a AUCUN effet (114 pages
+  // avec ou sans) et `from` ne filtre pas sur le créneau de livraison. Seul le
+  // recul de `from` réduit le volume : 14 j = 114 pages, 7 j = 63, 4 j = 33, et
+  // 7 j comme 4 j retrouvent 100 % des tâches du jour et du lendemain (2 j en perd
+  // 99). On garde 7 j : marge confortable, moitié moins de requêtes.
+  const lookbackDays = Number(process.env.QUITOQUE_LOOKBACK_DAYS || 7);
+  const fetchFrom = Date.now() - lookbackDays * 24 * 60 * 60 * 1000;
   const auth = Buffer.from(`${process.env.ONFLEET_API_KEY}:`).toString('base64');
   const allTasks = [];
   let lastId = null;
-  for (let page = 0; page < 200; page++) {
+  let pages = 0;
+  for (let page = 0; page < 300; page++) {
     const url = `https://onfleet.com/api/v2/tasks/all?from=${fetchFrom}&states=0,1,2${lastId ? `&lastId=${encodeURIComponent(lastId)}` : ''}`;
     const data = await onfleetGet(url, auth);
     const tasks = Array.isArray(data) ? data : (data.tasks || []);
     allTasks.push(...tasks);
+    pages++;
     lastId = !Array.isArray(data) && data.lastId ? data.lastId : null;
     if (!lastId) break;
-    await sleep(200); // reste sous la limite par seconde d'Onfleet
   }
-  console.log(`[quitoque] ${allTasks.length} tâche(s) totales récupérées, filtrage pour offset=${offsetDays}`);
-  return allTasks.filter(t => {
+  const result = allTasks.filter(t => {
     if (!t.notes || !QUITOQUE_PATTERN.test(t.notes.trim())) return false;
     const taskTime = t.completeAfter || t.completeBefore;
     if (!taskTime) return false;
     return taskTime >= targetFrom && taskTime <= targetTo;
   });
+  console.log(`[quitoque] ${allTasks.length} tâche(s) sur ${pages} page(s), ${result.length} Quitoque pour offset=${offsetDays}`);
+  quitoqueDayCache.set(cacheKey, { at: Date.now(), tasks: result });
+  for (const k of quitoqueDayCache.keys()) {           // purge des jours passés
+    if (Number(k) < targetFrom - 2 * 24 * 60 * 60 * 1000) quitoqueDayCache.delete(k);
+  }
+  return result;
 }
 
-const fetchTomorrowQuitoqueTasks = () => fetchQuitoqueTasksForDay(1);
-const fetchTodayQuitoqueTasks = () => fetchQuitoqueTasksForDay(0);
+const fetchTomorrowQuitoqueTasks = (opts) => fetchQuitoqueTasksForDay(1, opts);
+const fetchTodayQuitoqueTasks = (opts) => fetchQuitoqueTasksForDay(0, opts);
 
-async function sendQuitoqueEmails(offsetDays = 1) {
+async function sendQuitoqueEmails(offsetDays = 1, { force = false } = {}) {
   if (!Number.isInteger(offsetDays)) offsetDays = 1;
   console.log(`[quitoque] Démarrage envoi emails veille (offset=${offsetDays})...`);
   const from = process.env.EMAIL_FROM || 'Dromy Livraisons <onboarding@resend.dev>';
 
   let tasks;
   try {
-    tasks = await fetchQuitoqueTasksForDay(offsetDays);
+    tasks = await fetchQuitoqueTasksForDay(offsetDays, { force });
     console.log(`[quitoque] ${tasks.length} tâche(s) Quitoque pour demain`);
   } catch (err) {
     console.error('[quitoque] Erreur récupération tâches Onfleet:', err.message);
-    await resend.emails.send({
+    if (shouldAlert('quitoque-emails')) await resend.emails.send({
       from, to: ['julien.sargin@gmail.com'], cc: ['oweis@dromy.fr'],
       subject: '⚠️ Erreur cron Quitoque — récupération tâches Onfleet',
       html: `<p>Erreur lors de la récupération des tâches Quitoque pour demain.</p><p><strong>Erreur :</strong> ${err.message}</p>`,
@@ -553,15 +599,15 @@ async function fetchTodayQuitoqueSmsNumbers() {
 
 // Exécuté toutes les 15 min : envoie le SMS des tâches dont le créneau commence
 // dans moins d'1h (et pas encore commencé). Un SMS par tâche, une fois pour toutes.
-async function sendQuitoqueSms() {
+async function sendQuitoqueSms({ force = false } = {}) {
   const from = process.env.EMAIL_FROM || 'Dromy Livraisons <onboarding@resend.dev>';
 
   let tasks;
   try {
-    tasks = await fetchTodayQuitoqueTasks();
+    tasks = await fetchTodayQuitoqueTasks({ force });
   } catch (err) {
     console.error('[quitoque] Erreur récupération tâches Onfleet (SMS):', err.message);
-    await resend.emails.send({
+    if (shouldAlert('quitoque-sms')) await resend.emails.send({
       from, to: ['julien.sargin@gmail.com'], cc: ['oweis@dromy.fr'],
       subject: '⚠️ Erreur cron Quitoque SMS — récupération tâches Onfleet',
       html: `<p>Erreur lors de la récupération des tâches Quitoque pour aujourd'hui.</p><p><strong>Erreur :</strong> ${err.message}</p>`,
@@ -610,12 +656,12 @@ async function sendQuitoqueSms() {
 
 app.get('/send-quitoque-emails', async (req, res) => {
   const offset = req.query.offset !== undefined ? parseInt(req.query.offset, 10) : 1;
-  sendQuitoqueEmails(offset).catch(e => console.error('[quitoque] Erreur:', e.message));
+  sendQuitoqueEmails(offset, { force: true }).catch(e => console.error('[quitoque] Erreur:', e.message));
   res.status(200).json({ triggered: true, offset, message: 'Envoi emails Quitoque lancé, vérifiez les logs' });
 });
 
 app.get('/send-quitoque-sms', async (req, res) => {
-  sendQuitoqueSms().catch(e => console.error('[quitoque] Erreur SMS:', e.message));
+  sendQuitoqueSms({ force: true }).catch(e => console.error('[quitoque] Erreur SMS:', e.message));
   res.status(200).json({ triggered: true, message: 'Envoi SMS Quitoque lancé, vérifiez les logs' });
 });
 
