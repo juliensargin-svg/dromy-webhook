@@ -10,6 +10,7 @@ const express = require('express');
 const { Resend } = require('resend');
 const twilio = require('twilio');
 const cron = require('node-cron');
+const { buildLcmSms, selectDueLcmTasks, sentTaskIds } = require('./lcm-sms');
 
 console.log('[init] RESEND_API_KEY présente:', !!process.env.RESEND_API_KEY);
 console.log('[init] TWILIO_ACCOUNT_SID présente:', !!process.env.TWILIO_ACCOUNT_SID);
@@ -458,13 +459,15 @@ function shouldAlert(key) {
   return true;
 }
 
-// Cache mémoire des tâches d'un jour. Le cron SMS tourne toutes les 15 min :
-// sans cache on re-paginait toute la journée Onfleet 96×/jour (~10 000 requêtes
-// → HTTP 429). Les tâches d'un jour sont créées la veille, un cache court suffit.
+// Cache mémoire des tâches d'un jour, TOUS CLIENTS confondus : Quitoque et LCM
+// filtrent ensuite sur leurs notes. Le cron SMS tourne toutes les 15 min : sans
+// cache on re-paginait toute la journée Onfleet 96×/jour (~10 000 requêtes →
+// HTTP 429). Les tâches d'un jour sont créées la veille, un cache court suffit.
 const QUITOQUE_CACHE_TTL_MS = Number(process.env.QUITOQUE_CACHE_TTL_MS || 30 * 60 * 1000);
-const quitoqueDayCache = new Map(); // clé "YYYY-MM-DD" -> { at, tasks }
+const dayTaskCache = new Map(); // clé : minuit du jour (ms) -> { at, tasks }
+const dayTaskInFlight = new Map(); // évite deux paginations simultanées du même jour
 
-async function fetchQuitoqueTasksForDay(offsetDays, { force = false } = {}) {
+async function fetchPendingTasksForDay(offsetDays, { force = false } = {}) {
   const parisDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Paris' }).format(new Date());
   const [y, m, d] = parisDate.split('-').map(Number);
   const targetFrom = parisMidnightUtc(y, m, d + offsetDays);
@@ -472,15 +475,26 @@ async function fetchQuitoqueTasksForDay(offsetDays, { force = false } = {}) {
 
   const cacheKey = `${targetFrom}`;
   if (!force) {
-    const hit = quitoqueDayCache.get(cacheKey);
+    const hit = dayTaskCache.get(cacheKey);
     if (hit && Date.now() - hit.at < QUITOQUE_CACHE_TTL_MS) {
-      console.log(`[quitoque] cache hit (offset=${offsetDays}, ${hit.tasks.length} tâche(s), ${Math.round((Date.now() - hit.at) / 1000)}s)`);
+      console.log(`[onfleet] cache hit (offset=${offsetDays}, ${hit.tasks.length} tâche(s), ${Math.round((Date.now() - hit.at) / 1000)}s)`);
       return hit.tasks;
     }
   }
+  if (dayTaskInFlight.has(cacheKey)) return dayTaskInFlight.get(cacheKey);
+  const pending = paginateDay(offsetDays, targetFrom, targetTo, cacheKey)
+    .finally(() => dayTaskInFlight.delete(cacheKey));
+  dayTaskInFlight.set(cacheKey, pending);
+  return pending;
+}
+
+async function paginateDay(offsetDays, targetFrom, targetTo, cacheKey) {
 
   // L'API Onfleet pagine par 64 : on parcourt toutes les pages via lastId.
-  // states=0,1,2 (à venir/assignées/en cours) exclut les tâches déjà complétées.
+  // state=0,1,2 (à venir/assignées/en cours) exclut les tâches déjà complétées.
+  // ⚠️ Le paramètre s'appelle `state` (singulier). Il était écrit `states`
+  // jusqu'au 30/09/2026 : Onfleet l'ignorait en silence et renvoyait TOUT,
+  // livraisons terminées comprises — mesuré 27 pages au lieu de 9 sur 2 jours.
   // Mesuré le 14/09/2026 sur les vraies données : `to` n'a AUCUN effet (114 pages
   // avec ou sans) et `from` ne filtre pas sur le créneau de livraison. Seul le
   // recul de `from` réduit le volume : 14 j = 114 pages, 7 j = 63, 4 j = 33, et
@@ -493,7 +507,7 @@ async function fetchQuitoqueTasksForDay(offsetDays, { force = false } = {}) {
   let lastId = null;
   let pages = 0;
   for (let page = 0; page < 300; page++) {
-    const url = `https://onfleet.com/api/v2/tasks/all?from=${fetchFrom}&states=0,1,2${lastId ? `&lastId=${encodeURIComponent(lastId)}` : ''}`;
+    const url = `https://onfleet.com/api/v2/tasks/all?from=${fetchFrom}&state=0,1,2${lastId ? `&lastId=${encodeURIComponent(lastId)}` : ''}`;
     const data = await onfleetGet(url, auth);
     const tasks = Array.isArray(data) ? data : (data.tasks || []);
     allTasks.push(...tasks);
@@ -502,17 +516,21 @@ async function fetchQuitoqueTasksForDay(offsetDays, { force = false } = {}) {
     if (!lastId) break;
   }
   const result = allTasks.filter(t => {
-    if (!t.notes || !QUITOQUE_PATTERN.test(t.notes.trim())) return false;
     const taskTime = t.completeAfter || t.completeBefore;
     if (!taskTime) return false;
     return taskTime >= targetFrom && taskTime <= targetTo;
   });
-  console.log(`[quitoque] ${allTasks.length} tâche(s) sur ${pages} page(s), ${result.length} Quitoque pour offset=${offsetDays}`);
-  quitoqueDayCache.set(cacheKey, { at: Date.now(), tasks: result });
-  for (const k of quitoqueDayCache.keys()) {           // purge des jours passés
-    if (Number(k) < targetFrom - 2 * 24 * 60 * 60 * 1000) quitoqueDayCache.delete(k);
+  console.log(`[onfleet] ${allTasks.length} tâche(s) sur ${pages} page(s), ${result.length} pour offset=${offsetDays}`);
+  dayTaskCache.set(cacheKey, { at: Date.now(), tasks: result });
+  for (const k of dayTaskCache.keys()) {           // purge des jours passés
+    if (Number(k) < targetFrom - 2 * 24 * 60 * 60 * 1000) dayTaskCache.delete(k);
   }
   return result;
+}
+
+async function fetchQuitoqueTasksForDay(offsetDays, opts) {
+  const tasks = await fetchPendingTasksForDay(offsetDays, opts);
+  return tasks.filter(t => t.notes && QUITOQUE_PATTERN.test(t.notes.trim()));
 }
 
 const fetchTomorrowQuitoqueTasks = (opts) => fetchQuitoqueTasksForDay(1, opts);
@@ -654,6 +672,90 @@ async function sendQuitoqueSms({ force = false } = {}) {
   }
 }
 
+// ── LCM (les Cuistots Migrateurs) : SMS 1h avant le créneau ──────────────────
+// Pas d'email veille : les tâches LCM ne contiennent aucune adresse email.
+
+// Corps des SMS envoyés aujourd'hui depuis notre numéro. Lu dans Twilio (et non
+// en mémoire) pour résister aux redémarrages Railway.
+async function fetchTodaySmsBodies() {
+  if (!twilioClient) return [];
+  const parisDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Paris' }).format(new Date());
+  const [y, m, d] = parisDate.split('-').map(Number);
+  const msgs = await twilioClient.messages.list({
+    from: process.env.TWILIO_FROM,
+    dateSentAfter: new Date(parisMidnightUtc(y, m, d)),
+    limit: 1000,
+  });
+  return msgs.map(msg => msg.body || '');
+}
+
+// Exécuté toutes les 15 min. `dryRun` : calcule ce qui partirait sans rien
+// envoyer (vérification sans risque en production).
+async function sendLcmSms({ force = false, dryRun = false } = {}) {
+  const from = process.env.EMAIL_FROM || 'Dromy Livraisons <onboarding@resend.dev>';
+
+  let tasks;
+  try {
+    tasks = await fetchPendingTasksForDay(0, { force });
+  } catch (err) {
+    console.error('[lcm] Erreur récupération tâches Onfleet (SMS):', err.message);
+    if (shouldAlert('lcm-sms')) await resend.emails.send({
+      from, to: ['julien.sargin@gmail.com'], cc: ['oweis@dromy.fr'],
+      subject: '⚠️ Erreur cron LCM SMS — récupération tâches Onfleet',
+      html: `<p>Erreur lors de la récupération des tâches LCM pour aujourd'hui.</p><p><strong>Erreur :</strong> ${err.message}</p>`,
+    }).catch(e => console.error('[lcm] Erreur alerte:', e.message));
+    return { error: err.message };
+  }
+
+  const due = selectDueLcmTasks(tasks);
+  if (due.length === 0) return { due: 0, sent: 0, skipped: 0 };
+
+  let alreadySent;
+  try {
+    alreadySent = sentTaskIds(await fetchTodaySmsBodies());
+  } catch (err) {
+    console.error('[lcm] Erreur dédup Twilio, envoi prudent annulé:', err.message);
+    return { error: 'dédup Twilio indisponible' }; // pas de dédup fiable -> pas d'envoi
+  }
+
+  const todo = due.filter(t => !alreadySent.has(t.id));
+  console.log(`[lcm] ${due.length} SMS dû(s), ${due.length - todo.length} déjà envoyé(s)${dryRun ? ' — SIMULATION' : ''}`);
+
+  let sent = 0;
+  for (const task of todo) {
+    const phone = task.recipients[0].phone;
+    const body = buildLcmSms(task);
+    if (dryRun) {
+      console.log(`[lcm] (simulation) ${task.id} -> ${phone.slice(0, 4)}…${phone.slice(-2)} : ${body}`);
+      continue;
+    }
+    try {
+      await sendSms(phone, body);
+      sent++;
+      console.log(`[lcm] SMS envoyé pour ${task.id}`);
+    } catch (err) {
+      console.error(`[lcm] Erreur SMS pour ${task.id}:`, err.message);
+      await resend.emails.send({
+        from, to: ['julien.sargin@gmail.com'], cc: ['oweis@dromy.fr'],
+        subject: `⚠️ Erreur SMS LCM — tâche ${task.id}`,
+        html: `<p>Erreur lors de l'envoi du SMS LCM.</p><p><strong>Tâche :</strong> ${task.id}</p><p><strong>Numéro :</strong> ${phone}</p><p><strong>Erreur :</strong> ${err.message}</p>`,
+      }).catch(e => console.error('[lcm] Erreur alerte:', e.message));
+    }
+  }
+  return { due: due.length, sent, skipped: due.length - todo.length, dryRun };
+}
+
+app.get('/send-lcm-sms', async (req, res) => {
+  const dryRun = req.query.dryRun === '1';
+  try {
+    // Ne renvoie que des compteurs : cette route n'est pas authentifiée, elle
+    // ne doit exposer ni numéro ni nom de destinataire.
+    res.status(200).json(await sendLcmSms({ force: true, dryRun }));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/send-quitoque-emails', async (req, res) => {
   const offset = req.query.offset !== undefined ? parseInt(req.query.offset, 10) : 1;
   sendQuitoqueEmails(offset, { force: true }).catch(e => console.error('[quitoque] Erreur:', e.message));
@@ -669,9 +771,15 @@ app.get('/send-quitoque-sms', async (req, res) => {
 // node-cron passe la date d'exécution en argument : ne jamais lui donner
 // sendQuitoqueEmails directement (elle la prendrait pour offsetDays)
 cron.schedule('0 21 * * *', () => sendQuitoqueEmails(1), { timezone: 'Europe/Paris' });
-// Cron SMS : toutes les 15 min — chaque SMS part 1h avant le début de son créneau
-cron.schedule('*/15 * * * *', () => sendQuitoqueSms(), { timezone: 'Europe/Paris' });
+// Cron SMS : toutes les 15 min — chaque SMS part 1h avant le début de son créneau.
+// Quitoque puis LCM, À LA SUITE : ils partagent le cache des tâches du jour, une
+// seule pagination Onfleet sert aux deux.
+cron.schedule('*/15 * * * *', async () => {
+  await sendQuitoqueSms().catch(e => console.error('[quitoque] Erreur SMS:', e.message));
+  await sendLcmSms().catch(e => console.error('[lcm] Erreur SMS:', e.message));
+}, { timezone: 'Europe/Paris' });
 console.log('[init] Cron Quitoque : emails 21h, SMS toutes les 15 min (1h avant créneau)');
+console.log('[init] Cron LCM : SMS toutes les 15 min (1h avant créneau)');
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, '0.0.0.0', () => {
