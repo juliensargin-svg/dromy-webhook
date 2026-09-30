@@ -647,6 +647,13 @@ async function sendQuitoqueSms({ force = false } = {}) {
     alreadySent = await fetchTodayQuitoqueSmsNumbers();
   } catch (err) {
     console.error('[quitoque] Erreur dédup Twilio, envoi prudent annulé:', err.message);
+    // Sans alerte, cette panne passait inaperçue : aucun SMS ne partait, sans
+    // la moindre trace hors des journaux Railway.
+    if (shouldAlert('quitoque-sms-dedup')) await resend.emails.send({
+      from, to: ['julien.sargin@gmail.com'], cc: ['oweis@dromy.fr'],
+      subject: '⚠️ SMS Quitoque suspendus — historique Twilio illisible',
+      html: `<p>${due.length} SMS Quitoque étaient à envoyer, mais l'historique Twilio (qui évite les doublons) n'a pas pu être lu. Par prudence, <strong>aucun SMS n'est parti</strong>. Le serveur réessaie toutes les 15 min.</p><p><strong>Erreur :</strong> ${err.message}</p>`,
+    }).catch(e => console.error('[quitoque] Erreur alerte:', e.message));
     return; // sans dédup fiable, on ne prend pas le risque de doublons
   }
 
@@ -715,6 +722,11 @@ async function sendLcmSms({ force = false, dryRun = false } = {}) {
     alreadySent = sentTaskIds(await fetchTodaySmsBodies());
   } catch (err) {
     console.error('[lcm] Erreur dédup Twilio, envoi prudent annulé:', err.message);
+    if (!dryRun && shouldAlert('lcm-sms-dedup')) await resend.emails.send({
+      from, to: ['julien.sargin@gmail.com'], cc: ['oweis@dromy.fr'],
+      subject: '⚠️ SMS LCM suspendus — historique Twilio illisible',
+      html: `<p>${due.length} SMS LCM étaient à envoyer, mais l'historique Twilio (qui évite les doublons) n'a pas pu être lu. Par prudence, <strong>aucun SMS n'est parti</strong>. Le serveur réessaie toutes les 15 min.</p><p><strong>Erreur :</strong> ${err.message}</p>`,
+    }).catch(e => console.error('[lcm] Erreur alerte:', e.message));
     return { error: 'dédup Twilio indisponible' }; // pas de dédup fiable -> pas d'envoi
   }
 
