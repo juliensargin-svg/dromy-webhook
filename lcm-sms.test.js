@@ -19,7 +19,7 @@ test('heures au format français, en heure de Paris', () => {
 test('texte du SMS', () => {
   assert.equal(
     buildLcmSms(task()),
-    "Votre commande les Cuistots Migrateurs sera livrée aujourd'hui entre 12h et 14h. Suivi : https://dromy.vercel.app/t/kH14ZyjOASmzRrHQe4oPbUc2\n\nUn souci ? dispatch@dromy.fr"
+    "Les Cuistots Migrateurs : livraison aujourd'hui entre 12h et 14h. Suivi : https://dromy.vercel.app/t/kH14ZyjOASmzRrHQe4oPbUc2\nUn souci ? dispatch@dromy.fr"
   );
 });
 
@@ -54,4 +54,18 @@ test('identifiants Onfleet contenant * et ~', () => {
   assert.ok(sentTaskIds([buildLcmSms(t)]).has('WKvOUAl*saYB8o7PSXRMfZuL'));
   const t2 = task({ id: 'eALoJxAe~abc*def~ghijklm' });
   assert.ok(sentTaskIds([buildLcmSms(t2)]).has('eALoJxAe~abc*def~ghijklm'));
+});
+
+// Alphabet GSM-7 de base : un seul caractère hors de cet alphabet fait passer
+// le SMS en UCS-2, limité à 70 caractères par SMS.
+const GSM7 = "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà";
+
+test('tient en UN seul SMS, même dans le pire cas', () => {
+  // Créneau le plus long à écrire, identifiant Onfleet de longueur maximale.
+  const pire = buildLcmSms(task({
+    id: 'x'.repeat(24), completeAfter: paris('17:30'), completeBefore: paris('19:30'),
+  }));
+  const horsGsm = [...pire].filter((c) => !GSM7.includes(c));
+  assert.deepEqual(horsGsm, [], 'caractère hors GSM-7 : le SMS passerait à 70 caractères max');
+  assert.ok(pire.length <= 160, `${pire.length} caractères : facturé 2 SMS`);
 });

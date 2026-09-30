@@ -29,7 +29,10 @@ function formatHour(timestamp) {
 function buildLcmSms(task) {
   const debut = formatHour(task.completeAfter);
   const fin = formatHour(task.completeBefore);
-  return `Votre commande les Cuistots Migrateurs sera livrée aujourd'hui entre ${debut} et ${fin}. Suivi : ${trackingUrl(task)}\n\nUn souci ? dispatch@dromy.fr`;
+  // Formulation choisie pour tenir en UN seul SMS (160 caractères GSM-7) dans
+  // le pire cas (créneau 17h30-19h30) : 158. La version « Votre commande les
+  // Cuistots Migrateurs sera livrée… » faisait 169-174 → facturée 2 SMS.
+  return `Les Cuistots Migrateurs : livraison aujourd'hui entre ${debut} et ${fin}. Suivi : ${trackingUrl(task)}\nUn souci ? dispatch@dromy.fr`;
 }
 
 // Tâches dont le SMS doit partir maintenant : on est dans l'heure qui précède
