@@ -11,6 +11,7 @@ const { Resend } = require('resend');
 const twilio = require('twilio');
 const cron = require('node-cron');
 const { buildLcmSms, selectDueLcmTasks, sentTaskIds } = require('./lcm-sms');
+const { smsBlockReason } = require('./sms-phone');
 
 console.log('[init] RESEND_API_KEY présente:', !!process.env.RESEND_API_KEY);
 console.log('[init] TWILIO_ACCOUNT_SID présente:', !!process.env.TWILIO_ACCOUNT_SID);
@@ -156,14 +157,18 @@ function buildEmailHtml({ ref, address, completedAt, photoUrl, signatureUrl, sig
 </html>`;
 }
 
+// Renvoie le message Twilio, ou { skipped: raison } si rien n'a été envoyé.
+// Un numéro qui ne peut pas recevoir de SMS (fixe, box…) n'est pas une erreur :
+// pas d'exception, donc pas d'email d'alerte.
 async function sendSms(to, body) {
   if (!twilioClient) {
     console.warn('[sms] Twilio non configuré, SMS ignoré');
-    return;
+    return { skipped: 'Twilio non configuré' };
   }
-  if (!to) {
-    console.warn('[sms] Pas de numéro de téléphone, SMS ignoré');
-    return;
+  const blocked = smsBlockReason(to);
+  if (blocked) {
+    console.log(`[sms] Non envoyé (${blocked}) : ${to ? String(to).slice(0, 5) + '…' : 'aucun numéro'}`);
+    return { skipped: blocked };
   }
   const message = await twilioClient.messages.create({
     from: process.env.TWILIO_FROM,
@@ -664,7 +669,8 @@ async function sendQuitoqueSms({ force = false } = {}) {
     const trackingUrl = `https://dromy.vercel.app/t/${task.id}`;
     const smsBody = `Votre box Quitoque sera livrée aujourd'hui. Suivi : ${trackingUrl}\nUn souci? dispatch@dromy.fr`;
     try {
-      await sendSms(phone, smsBody);
+      const res = await sendSms(phone, smsBody);
+      if (res?.skipped) continue;
       alreadySent.add(phone);
       const creneau = new Date(task.completeAfter).toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' });
       console.log(`[quitoque] SMS envoyé pour ${task.notes} (créneau ${creneau})`);
@@ -734,15 +740,19 @@ async function sendLcmSms({ force = false, dryRun = false } = {}) {
   console.log(`[lcm] ${due.length} SMS dû(s), ${due.length - todo.length} déjà envoyé(s)${dryRun ? ' — SIMULATION' : ''}`);
 
   let sent = 0;
+  let skippedNumbers = 0;
   for (const task of todo) {
     const phone = task.recipients[0].phone;
     const body = buildLcmSms(task);
     if (dryRun) {
-      console.log(`[lcm] (simulation) ${task.id} -> ${phone.slice(0, 4)}…${phone.slice(-2)} : ${body}`);
+      const why = smsBlockReason(phone);
+      if (why) skippedNumbers++;
+      console.log(`[lcm] (simulation) ${task.id} -> ${phone.slice(0, 4)}…${phone.slice(-2)} : ${why ? 'NON ENVOYÉ, ' + why : body}`);
       continue;
     }
     try {
-      await sendSms(phone, body);
+      const res = await sendSms(phone, body);
+      if (res?.skipped) { skippedNumbers++; continue; }
       sent++;
       console.log(`[lcm] SMS envoyé pour ${task.id}`);
     } catch (err) {
@@ -754,7 +764,7 @@ async function sendLcmSms({ force = false, dryRun = false } = {}) {
       }).catch(e => console.error('[lcm] Erreur alerte:', e.message));
     }
   }
-  return { due: due.length, sent, skipped: due.length - todo.length, dryRun };
+  return { due: due.length, sent, skipped: due.length - todo.length, notMobile: skippedNumbers, dryRun };
 }
 
 app.get('/send-lcm-sms', async (req, res) => {
